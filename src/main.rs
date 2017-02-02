@@ -7,6 +7,12 @@ extern crate tokio_curl;
 extern crate tokio_timer;
 extern crate tokio_pool;
 extern crate threadpool;
+#[macro_use]
+extern crate clap;
+
+mod args;
+
+use args::{Config, parse_args};
 
 use curl::easy::Easy;
 use futures::{Future, lazy};
@@ -47,25 +53,25 @@ struct Boss {
     pub connections: usize,
 
     thread_pool: ThreadPool,
-    workers: usize,
+    num_threads: usize,
 }
 
 impl Boss {
-    pub fn new(workers: usize) -> Self {
+    pub fn new(num_threads: usize) -> Self {
         Boss {
             requests_completed: 0,
             connections: 0,
-            thread_pool: ThreadPool::new(workers),
-            workers: workers,
+            thread_pool: ThreadPool::new(num_threads),
+            num_threads: num_threads,
         }
     }
 
     /// Should return a future
     pub fn start_workforce(&self, desired_connections: usize, url: String) {
 
-        let jobs = 10;
+        let jobs = desired_connections;
         let (tx, rx) = channel();
-        for _ in 0..self.workers {
+        for _ in 0..self.num_threads {
             let tx = tx.clone();
             let url = url.clone();
             self.thread_pool.execute(move || {
@@ -88,18 +94,18 @@ impl Boss {
             });
         }
 
-        let res = rx.iter().take(jobs * self.workers).fold(0, |a, b| a + b);
+        let res = rx.iter().take(jobs * self.num_threads).fold(0, |a, b| a + b);
         println!("{}", res);
     }
 }
 
-fn start() {
-    let workers = 4;
-    let boss = Boss::new(workers);
-    boss.start_workforce(300, "localhost:8000".into())
+fn start(config: Config) {
+    let boss = Boss::new(config.num_threads);
+    boss.start_workforce(config.num_connections, config.url)
 }
 
 fn main() {
     env_logger::init().unwrap();
-    start();
+    let config = parse_args();
+    start(config);
 }
