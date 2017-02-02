@@ -1,11 +1,8 @@
 extern crate curl;
 extern crate env_logger;
 extern crate futures;
-extern crate futures_cpupool;
 extern crate tokio_core;
 extern crate tokio_curl;
-extern crate tokio_timer;
-extern crate tokio_pool;
 extern crate threadpool;
 #[macro_use]
 extern crate clap;
