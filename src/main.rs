@@ -12,25 +12,43 @@ mod args;
 use args::{Config, parse_args};
 
 use curl::easy::Easy;
-use futures::{Future, lazy};
+use futures::{Async, Future, lazy, Poll};
 use futures::future::{ok, join_all};
 use tokio_core::reactor::Core;
-use tokio_curl::{Perform, Session};
+use tokio_curl::{Perform, PerformError, Session};
 use std::rc::Rc;
 use std::cell::RefCell;
 use threadpool::ThreadPool;
-use std::sync::mpsc::channel;
+use std::sync::{Arc, Barrier};
 
 struct Worker {
     event_loop: Rc<RefCell<Core>>,
 }
 
 impl Worker {
-    pub fn new(event_loop: Rc<RefCell<Core>>) -> Self {
+    pub fn new(event_loop: Rc<RefCell<Core>>
+) -> Self {
         Worker { event_loop: event_loop }
     }
 
-    pub fn send_request(&self, url: String) -> Perform {
+    /// Schedule work, but do not actually run it.
+    /// Instead, return a future.
+    pub fn schedule_work(&self, url: String, num_connections: usize) -> 
+            Box<Future<Item = usize, Error = PerformError>> {
+        let mut futures = Vec::new();
+        for _ in 0..num_connections {
+            let url = url.clone();
+            let future = self.send_request(url)
+                .then(|x| {
+                    // tx.send(1).unwrap();
+                    x
+                });
+            futures.push(future);
+        }
+        Box::new(join_all(futures).then(|x| x.map(|vec| vec.len())))
+    }
+
+    fn send_request(&self, url: String) -> Perform {
         let lp = self.event_loop.borrow();
 
         let session = Session::new(lp.handle());
@@ -67,32 +85,31 @@ impl Boss {
     pub fn start_workforce(&self, desired_connections: usize, url: String) {
 
         let jobs = desired_connections;
-        let (tx, rx) = channel();
+        // let (tx, rx) = channel();
+        // create a barrier that wait all jobs plus the starter thread
+        let barrier = Arc::new(Barrier::new(self.num_threads + 1));
         for _ in 0..self.num_threads {
-            let tx = tx.clone();
+            let barrier = barrier.clone();
+            // let tx = tx.clone();
             let url = url.clone();
             self.thread_pool.execute(move || {
                 let lp = Core::new().unwrap();
                 let lp = Rc::new(RefCell::new(lp));
 
                 let worker = Worker::new(lp.clone());
-                let mut futures = Vec::new();
-                for _ in 0..jobs {
-                    let url = url.clone();
-                    let future = worker.send_request(url)
-                        .then(|x| {
-                            tx.send(1).unwrap();
-                            x
-                        });
-                    futures.push(future);
-                }
-                let future = join_all(futures);
-                lp.borrow_mut().run(future).unwrap();
+                let future = worker.schedule_work(url, jobs);
+                let res = lp.borrow_mut().run(future).unwrap();
+                println!("{}", res);
+
+                // then wait for the other threads
+                barrier.wait();
             });
         }
 
-        let res = rx.iter().take(jobs * self.num_threads).fold(0, |a, b| a + b);
-        println!("{}", res);
+        // let res = rx.iter().take(jobs * self.num_threads).fold(0, |a, b| a + b);
+        // println!("{}", res);
+        // wait for the threads to finish the work
+        barrier.wait();
     }
 }
 
