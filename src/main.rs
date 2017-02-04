@@ -36,10 +36,10 @@ impl Worker {
         Worker { num_requests: 0}
     }
 
-    fn send_request(mut self, url: String, session: &Session) -> futures::BoxFuture<Self, PerformError> {
+    fn send_request(mut self, url: &str, session: &Session) -> futures::BoxFuture<Self, PerformError> {
         let mut a = Easy::new();
         a.get(true).unwrap();
-        a.url(&url).unwrap();
+        a.url(url).unwrap();
         a.write_function(|data| Ok(data.len())).unwrap();
         Box::new(session.perform(a)
             .and_then(move |_| {
@@ -89,7 +89,7 @@ impl Boss {
 
                 let iterator = (0..desired_connections).map(|_| {
                     loop_fn(Worker::new(), |worker| {
-                        worker.send_request(url.clone(), &session)
+                        worker.send_request(&url.clone(), &session)
                             .and_then(|count| {
                                 let now_time = Local::now();
                                 if now_time < wanted_end_time {
