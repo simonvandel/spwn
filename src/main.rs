@@ -87,7 +87,6 @@ impl Boss {
                     let mut easy_request = Easy::new();
                     easy_request.get(true).unwrap();
                     easy_request.url(&url).unwrap();
-                    easy_request.write_function(|data| Ok(data.len())).unwrap();
                     loop_fn((Worker::new(), easy_request), |(worker, easy)| {
                         worker.send_request(easy, &session)
                             .and_then(|state| {
