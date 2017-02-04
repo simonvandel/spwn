@@ -15,17 +15,13 @@ mod args;
 use args::{Config, parse_args};
 
 use curl::easy::Easy;
-use futures::{Async, Future, lazy, Poll, stream};
-use futures::future::{ok, join_all, FutureResult, loop_fn, Loop};
-use futures::sync::mpsc::channel;
-use futures::{Stream, Sink};
-use tokio_core::reactor::{Core, Handle};
-use tokio_curl::{Perform, PerformError, Session};
-use std::rc::Rc;
-use std::cell::RefCell;
+use futures::{Future, stream};
+use futures::future::{ok, loop_fn, Loop};
+use futures::{Stream};
+use tokio_core::reactor::{Core};
+use tokio_curl::{PerformError, Session};
 use threadpool::ThreadPool;
 use std::sync::{Arc, Barrier};
-use futures::stream::FuturesUnordered;
 use chrono::*;
 
 
@@ -68,13 +64,11 @@ impl Boss {
         }
     }
 
-    /// Should return a future
     pub fn start_workforce(&self, desired_connections: usize, url: String, duration: Duration) {
         // create a barrier that wait all jobs plus the starter thread
         let barrier = Arc::new(Barrier::new(self.num_threads + 1));
         for _ in 0..self.num_threads {
             let barrier = barrier.clone();
-            // let tx = tx.clone();
             let url = url.clone();
             self.thread_pool.execute(move || {
                 
