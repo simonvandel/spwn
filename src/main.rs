@@ -73,7 +73,7 @@ impl Boss {
     }
 
     /// Should return a future
-    pub fn start_workforce(&self, desired_connections: usize, url: String) {
+    pub fn start_workforce(&self, desired_connections: usize, url: String, duration: Duration) {
         // create a barrier that wait all jobs plus the starter thread
         let barrier = Arc::new(Barrier::new(self.num_threads + 1));
         for _ in 0..self.num_threads {
@@ -84,7 +84,7 @@ impl Boss {
                 
                 let mut lp = Core::new().unwrap();
                 let start_time = Local::now();
-                let wanted_end_time = start_time + Duration::seconds(10);
+                let wanted_end_time = start_time + duration;
                 let session = Session::new(lp.handle());
 
                 let iterator = (0..desired_connections).map(|_| {
@@ -116,7 +116,7 @@ impl Boss {
 
 fn start(config: Config) {
     let boss = Boss::new(config.num_threads);
-    boss.start_workforce(config.num_connections, config.url)
+    boss.start_workforce(config.num_connections, config.url, config.duration)
 }
 
 fn main() {
