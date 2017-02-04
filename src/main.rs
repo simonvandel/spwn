@@ -26,6 +26,7 @@ use chrono::*;
 
 
 struct Worker {
+    /// Number of succesful requests this worker has made
     num_requests: u32,
 }
 
