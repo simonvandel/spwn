@@ -1,3 +1,5 @@
+#![feature(conservative_impl_trait)]
+
 extern crate curl;
 extern crate env_logger;
 extern crate futures;
@@ -36,20 +38,14 @@ impl Worker {
         Worker { num_requests: 0}
     }
 
-    fn send_request(mut self, url: &str, session: &Session) -> futures::BoxFuture<Self, PerformError> {
-        let mut a = Easy::new();
-        a.get(true).unwrap();
-        a.url(url).unwrap();
-        a.write_function(|data| Ok(data.len())).unwrap();
-        Box::new(session.perform(a)
-            .and_then(move |_| {
+    fn send_request(mut self, easy_request: Easy, session: &Session) -> impl Future<Item=(Self, Easy), Error=PerformError> {
+        session.perform(easy_request)
+            .and_then(move |easy| {
                 self.num_requests += 1;
-                ok(self)
-            }))
+                ok((self, easy))
+            })
     }
 }
-
-
 
 /// Delegates and manages all the work.
 struct Boss {
@@ -86,22 +82,26 @@ impl Boss {
                 let start_time = Local::now();
                 let wanted_end_time = start_time + duration;
                 let session = Session::new(lp.handle());
-
+                
                 let iterator = (0..desired_connections).map(|_| {
-                    loop_fn(Worker::new(), |worker| {
-                        worker.send_request(&url.clone(), &session)
-                            .and_then(|count| {
+                    let mut easy_request = Easy::new();
+                    easy_request.get(true).unwrap();
+                    easy_request.url(&url).unwrap();
+                    easy_request.write_function(|data| Ok(data.len())).unwrap();
+                    loop_fn((Worker::new(), easy_request), |(worker, easy)| {
+                        worker.send_request(easy, &session)
+                            .and_then(|state| {
                                 let now_time = Local::now();
                                 if now_time < wanted_end_time {
-                                    Ok(Loop::Continue(count))
+                                    Ok(Loop::Continue(state))
                                 } else {
-                                    Ok(Loop::Break(count))
+                                    Ok(Loop::Break(state))
                                 }
                             })
                     })
                 });
                 let future = stream::futures_unordered(iterator)
-                    .fold(0, |acc, res| ok(acc + res.num_requests));
+                    .fold(0, |acc, (res, _)| ok(acc + res.num_requests));
                 let res = lp.run(future).unwrap();
                 println!("{:?}", res);
 

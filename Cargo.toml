@@ -13,3 +13,6 @@ num_cpus = "1.2.1"
 threadpool = "1.3.2"
 tokio-core = "0.1.4"
 tokio-curl = "0.1.9"
+
+[profile.release]
+debug = true
