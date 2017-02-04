@@ -6,59 +6,50 @@ extern crate tokio_curl;
 extern crate threadpool;
 #[macro_use]
 extern crate clap;
+extern crate chrono;
 
 mod args;
 
 use args::{Config, parse_args};
 
 use curl::easy::Easy;
-use futures::{Async, Future, lazy, Poll};
-use futures::future::{ok, join_all};
-use tokio_core::reactor::Core;
+use futures::{Async, Future, lazy, Poll, stream};
+use futures::future::{ok, join_all, FutureResult, loop_fn, Loop};
+use futures::sync::mpsc::channel;
+use futures::{Stream, Sink};
+use tokio_core::reactor::{Core, Handle};
 use tokio_curl::{Perform, PerformError, Session};
 use std::rc::Rc;
 use std::cell::RefCell;
 use threadpool::ThreadPool;
 use std::sync::{Arc, Barrier};
+use futures::stream::FuturesUnordered;
+use chrono::*;
+
 
 struct Worker {
-    event_loop: Rc<RefCell<Core>>,
+    num_requests: u32,
 }
 
 impl Worker {
-    pub fn new(event_loop: Rc<RefCell<Core>>
-) -> Self {
-        Worker { event_loop: event_loop }
+    pub fn new() -> Self {
+        Worker { num_requests: 0}
     }
 
-    /// Schedule work, but do not actually run it.
-    /// Instead, return a future.
-    pub fn schedule_work(&self, url: String, num_connections: usize) -> 
-            Box<Future<Item = usize, Error = PerformError>> {
-        let mut futures = Vec::new();
-        for _ in 0..num_connections {
-            let url = url.clone();
-            let future = self.send_request(url)
-                .then(|x| {
-                    // tx.send(1).unwrap();
-                    x
-                });
-            futures.push(future);
-        }
-        Box::new(join_all(futures).then(|x| x.map(|vec| vec.len())))
-    }
-
-    fn send_request(&self, url: String) -> Perform {
-        let lp = self.event_loop.borrow();
-
-        let session = Session::new(lp.handle());
+    fn send_request(mut self, url: String, session: &Session) -> futures::BoxFuture<Self, PerformError> {
         let mut a = Easy::new();
         a.get(true).unwrap();
         a.url(&url).unwrap();
         a.write_function(|data| Ok(data.len())).unwrap();
-        session.perform(a)
+        Box::new(session.perform(a)
+            .and_then(move |_| {
+                self.num_requests += 1;
+                ok(self)
+            }))
     }
 }
+
+
 
 /// Delegates and manages all the work.
 struct Boss {
@@ -83,9 +74,6 @@ impl Boss {
 
     /// Should return a future
     pub fn start_workforce(&self, desired_connections: usize, url: String) {
-
-        let jobs = desired_connections;
-        // let (tx, rx) = channel();
         // create a barrier that wait all jobs plus the starter thread
         let barrier = Arc::new(Barrier::new(self.num_threads + 1));
         for _ in 0..self.num_threads {
@@ -93,21 +81,34 @@ impl Boss {
             // let tx = tx.clone();
             let url = url.clone();
             self.thread_pool.execute(move || {
-                let lp = Core::new().unwrap();
-                let lp = Rc::new(RefCell::new(lp));
+                
+                let mut lp = Core::new().unwrap();
+                let start_time = Local::now();
+                let wanted_end_time = start_time + Duration::seconds(10);
+                let session = Session::new(lp.handle());
 
-                let worker = Worker::new(lp.clone());
-                let future = worker.schedule_work(url, jobs);
-                let res = lp.borrow_mut().run(future).unwrap();
-                println!("{}", res);
+                let iterator = (0..desired_connections).map(|_| {
+                    loop_fn(Worker::new(), |worker| {
+                        worker.send_request(url.clone(), &session)
+                            .and_then(|count| {
+                                let now_time = Local::now();
+                                if now_time < wanted_end_time {
+                                    Ok(Loop::Continue(count))
+                                } else {
+                                    Ok(Loop::Break(count))
+                                }
+                            })
+                    })
+                });
+                let future = stream::futures_unordered(iterator)
+                    .fold(0, |acc, res| ok(acc + res.num_requests));
+                let res = lp.run(future).unwrap();
+                println!("{:?}", res);
 
                 // then wait for the other threads
                 barrier.wait();
             });
         }
-
-        // let res = rx.iter().take(jobs * self.num_threads).fold(0, |a, b| a + b);
-        // println!("{}", res);
         // wait for the threads to finish the work
         barrier.wait();
     }
