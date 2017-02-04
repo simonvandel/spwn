@@ -8,6 +8,7 @@ I primarily developed this tool to play with [Rust](https://www.rust-lang.org) a
 - User-configurable number of concurrent connections
 - User-configurable number of threads to use
 - User-configurable duration to run the benchmark
+- Request count (total and per second)
 
 ## Example
 The following example will fire requests, maintaining 100 connections, to `localhost:8080` for 2 seconds using 4 threads.

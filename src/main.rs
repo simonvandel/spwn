@@ -21,13 +21,13 @@ use futures::{Stream};
 use tokio_core::reactor::{Core};
 use tokio_curl::{PerformError, Session};
 use threadpool::ThreadPool;
-use std::sync::{Arc, Barrier};
 use chrono::*;
+use std::sync::mpsc::channel;
 
 
 struct Worker {
     /// Number of succesful requests this worker has made
-    num_requests: u32,
+    num_requests: usize,
 }
 
 impl Worker {
@@ -41,6 +41,18 @@ impl Worker {
                 self.num_requests += 1;
                 ok((self, easy))
             })
+    }
+}
+
+struct RunInfo {
+    /// Number of requests successfully completed
+    pub requests_completed: usize,
+    pub duration: Duration
+}
+
+impl RunInfo {
+    pub fn requests_per_second(&self) -> f32 {
+        (self.requests_completed as f32) / (self.duration.num_seconds() as f32)
     }
 }
 
@@ -65,11 +77,10 @@ impl Boss {
         }
     }
 
-    pub fn start_workforce(&self, desired_connections: usize, url: String, duration: Duration) {
-        // create a barrier that wait all jobs plus the starter thread
-        let barrier = Arc::new(Barrier::new(self.num_threads + 1));
+    pub fn start_workforce(&self, desired_connections: usize, url: String, duration: Duration) -> RunInfo {
+        let (tx, rx) = channel();
         for _ in 0..self.num_threads {
-            let barrier = barrier.clone();
+            let tx = tx.clone();
             let url = url.clone();
             self.thread_pool.execute(move || {
                 
@@ -97,24 +108,30 @@ impl Boss {
                 let future = stream::futures_unordered(iterator)
                     .fold(0, |acc, (res, _)| ok(acc + res.num_requests));
                 let res = lp.run(future).unwrap();
-                println!("{:?}", res);
-
-                // then wait for the other threads
-                barrier.wait();
+                tx.send(res).unwrap();
             });
         }
-        // wait for the threads to finish the work
-        barrier.wait();
+        // collect information from all threads
+        let total_num_requests: usize = rx.iter().take(self.num_threads).sum();
+        RunInfo {requests_completed: total_num_requests, duration: duration}
     }
 }
 
-fn start(config: Config) {
+fn start(config: Config) -> RunInfo {
     let boss = Boss::new(config.num_threads);
     boss.start_workforce(config.num_connections, config.url, config.duration)
+}
+
+/// Presents the results to the user
+fn present(run_info: RunInfo) {
+    let requests_completed = run_info.requests_completed;
+    println!("Total number of requests: {}", requests_completed);
+    println!("Requests per second: {}", run_info.requests_per_second())
 }
 
 fn main() {
     env_logger::init().unwrap();
     let config = parse_args();
-    start(config);
+    let run_info = start(config);
+    present(run_info)
 }
