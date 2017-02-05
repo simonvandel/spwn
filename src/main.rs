@@ -42,16 +42,24 @@ impl Worker {
 
     fn send_request(mut self, easy_request: Easy, session: &Session) -> impl Future<Item=(Self, Easy), Error=PerformError> {
         session.perform(easy_request)
-            .then(move |res| {
+            .then(|res| {
                 match res {
                     Ok(mut easy) => {
-                        (&mut self).num_requests += 1;
-                        let latency = Duration::from_std(easy.total_time().unwrap()).unwrap();
-                        self.histogram.increment(latency.num_nanoseconds().unwrap() as u64).unwrap();
+                        self.num_requests += 1;
+                        easy.total_time()
+                            .ok()
+                            .and_then(|x| 
+                                Duration::from_std(x).ok()
+                            )
+                            .and_then(|latency| {
+                                latency.num_nanoseconds()
+                                    .map(|x| self.histogram.increment(x as u64).ok())
+                            });
+                        
                         Ok((self, easy))
                     },
                     Err(error) => {
-                        (&mut self).num_failed_requests += 1;
+                        self.num_failed_requests += 1;
                         Err(error)
                     }
                 }
