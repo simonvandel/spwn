@@ -30,21 +30,31 @@ use histogram::*;
 struct Worker {
     /// Number of succesful requests this worker has made
     num_requests: usize,
-    histogram: Histogram
+    histogram: Histogram,
+    /// Number of failed requests this worker has made
+    num_failed_requests: usize,
 }
 
 impl Worker {
     pub fn new() -> Self {
-        Worker { num_requests: 0, histogram: Histogram::new()}
+        Worker { num_requests: 0, histogram: Histogram::new(), num_failed_requests: 0}
     }
 
     fn send_request(mut self, easy_request: Easy, session: &Session) -> impl Future<Item=(Self, Easy), Error=PerformError> {
         session.perform(easy_request)
-            .and_then(move |mut easy| {
-                self.num_requests += 1;
-                let latency = Duration::from_std(easy.total_time().unwrap()).unwrap();
-                self.histogram.increment(latency.num_nanoseconds().unwrap() as u64).unwrap();
-                ok((self, easy))
+            .then(move |res| {
+                match res {
+                    Ok(mut easy) => {
+                        (&mut self).num_requests += 1;
+                        let latency = Duration::from_std(easy.total_time().unwrap()).unwrap();
+                        self.histogram.increment(latency.num_nanoseconds().unwrap() as u64).unwrap();
+                        Ok((self, easy))
+                    },
+                    Err(error) => {
+                        (&mut self).num_failed_requests += 1;
+                        Err(error)
+                    }
+                }
             })
     }
 }
@@ -54,6 +64,8 @@ struct RunInfo {
     pub requests_completed: usize,
     pub duration: Duration,
     histogram: Histogram,
+    /// Number of failed requests
+    num_failed_requests: usize,
 }
 
 impl RunInfo {
@@ -112,21 +124,23 @@ impl Boss {
                     })
                 });
                 let future = stream::futures_unordered(iterator)
-                    .fold((0, Histogram::new()), |(request_acc, _), (res, _)|  {
+                    .fold((0, 0, Histogram::new()), |(request_acc, request_failed_acc, _), (res, _)|  {
                         let requests = request_acc + res.num_requests;
-                        ok((requests, res.histogram))
+                        let requests_failed = request_failed_acc + res.num_failed_requests;
+                        ok((requests, requests_failed, res.histogram))
                     });
                 let res = lp.run(future).unwrap();
                 tx.send(res).unwrap();
             });
         }
         // collect information from all threads
-        let (total_num_requests, histogram): (usize, Histogram) = rx.iter().take(self.num_threads).fold((0, Histogram::new()), |(request_acc, mut histogram_acc), (request, histogram)|  {
+        let (total_num_requests, requests_failed, histogram): (usize, usize, Histogram) = rx.iter().take(self.num_threads).fold((0, 0, Histogram::new()), |(request_acc, request_failed_acc, mut histogram_acc), (request, request_failed, histogram)|  {
                         let requests = request_acc + request;
+                        let requests_failed = request_failed_acc + request_failed;
                         histogram_acc.merge(&histogram);
-                        (requests, histogram_acc)
+                        (requests, requests_failed, histogram_acc)
                     });
-        RunInfo {requests_completed: total_num_requests, duration: duration, histogram: histogram}
+        RunInfo {requests_completed: total_num_requests, num_failed_requests: requests_failed, duration: duration, histogram: histogram}
     }
 }
 
@@ -143,6 +157,7 @@ fn nanoseconds_to_milliseconds(nanoseconds: u64) -> f64 {
 fn present(run_info: RunInfo) {
     let requests_completed = run_info.requests_completed;
     println!("{} requests in {}s", requests_completed, run_info.duration.num_seconds());
+    println!("{} failed requests", run_info.num_failed_requests);
     println!("Requests per second: {}", run_info.requests_per_second());
     println!("Latency distribution: \n50%: {} ms\n75%: {} ms\n90%: {} ms\n95%: {} ms\n99%: {} ms",
         run_info.histogram.percentile(50.0).map(nanoseconds_to_milliseconds).unwrap(),
