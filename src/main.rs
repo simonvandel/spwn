@@ -9,6 +9,7 @@ extern crate threadpool;
 #[macro_use]
 extern crate clap;
 extern crate chrono;
+extern crate histogram;
 
 mod args;
 
@@ -23,22 +24,26 @@ use tokio_curl::{PerformError, Session};
 use threadpool::ThreadPool;
 use chrono::*;
 use std::sync::mpsc::channel;
+use histogram::*;
 
 
 struct Worker {
     /// Number of succesful requests this worker has made
     num_requests: usize,
+    histogram: Histogram
 }
 
 impl Worker {
     pub fn new() -> Self {
-        Worker { num_requests: 0}
+        Worker { num_requests: 0, histogram: Histogram::new()}
     }
 
     fn send_request(mut self, easy_request: Easy, session: &Session) -> impl Future<Item=(Self, Easy), Error=PerformError> {
         session.perform(easy_request)
-            .and_then(move |easy| {
+            .and_then(move |mut easy| {
                 self.num_requests += 1;
+                let latency = Duration::from_std(easy.total_time().unwrap()).unwrap();
+                self.histogram.increment(latency.num_nanoseconds().unwrap() as u64).unwrap();
                 ok((self, easy))
             })
     }
@@ -47,7 +52,8 @@ impl Worker {
 struct RunInfo {
     /// Number of requests successfully completed
     pub requests_completed: usize,
-    pub duration: Duration
+    pub duration: Duration,
+    histogram: Histogram,
 }
 
 impl RunInfo {
@@ -106,14 +112,21 @@ impl Boss {
                     })
                 });
                 let future = stream::futures_unordered(iterator)
-                    .fold(0, |acc, (res, _)| ok(acc + res.num_requests));
+                    .fold((0, Histogram::new()), |(request_acc, _), (res, _)|  {
+                        let requests = request_acc + res.num_requests;
+                        ok((requests, res.histogram))
+                    });
                 let res = lp.run(future).unwrap();
                 tx.send(res).unwrap();
             });
         }
         // collect information from all threads
-        let total_num_requests: usize = rx.iter().take(self.num_threads).sum();
-        RunInfo {requests_completed: total_num_requests, duration: duration}
+        let (total_num_requests, histogram): (usize, Histogram) = rx.iter().take(self.num_threads).fold((0, Histogram::new()), |(request_acc, mut histogram_acc), (request, histogram)|  {
+                        let requests = request_acc + request;
+                        histogram_acc.merge(&histogram);
+                        (requests, histogram_acc)
+                    });
+        RunInfo {requests_completed: total_num_requests, duration: duration, histogram: histogram}
     }
 }
 
@@ -122,11 +135,22 @@ fn start(config: Config) -> RunInfo {
     boss.start_workforce(config.num_connections, config.url, config.duration)
 }
 
+fn nanoseconds_to_milliseconds(nanoseconds: u64) -> f64 {
+    nanoseconds as f64 / 1_000_000_f64
+}
+
 /// Presents the results to the user
 fn present(run_info: RunInfo) {
     let requests_completed = run_info.requests_completed;
-    println!("Total number of requests: {}", requests_completed);
-    println!("Requests per second: {}", run_info.requests_per_second())
+    println!("{} requests in {}s", requests_completed, run_info.duration.num_seconds());
+    println!("Requests per second: {}", run_info.requests_per_second());
+    println!("Latency distribution: \n50%: {} ms\n75%: {} ms\n90%: {} ms\n95%: {} ms\n99%: {} ms",
+        run_info.histogram.percentile(50.0).map(nanoseconds_to_milliseconds).unwrap(),
+        run_info.histogram.percentile(75.0).map(nanoseconds_to_milliseconds).unwrap(),
+        run_info.histogram.percentile(90.0).map(nanoseconds_to_milliseconds).unwrap(),
+        run_info.histogram.percentile(95.0).map(nanoseconds_to_milliseconds).unwrap(),
+        run_info.histogram.percentile(99.0).map(nanoseconds_to_milliseconds).unwrap(),
+    );
 }
 
 fn main() {
