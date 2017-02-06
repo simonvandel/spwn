@@ -14,6 +14,9 @@ num_cpus = "1.2.1"
 tokio-core = "0.1.4"
 tokio-curl = "0.1.9"
 
+[dev-dependencies]
+quickcheck = "0.4"
+
 [profile]
 
 [profile.release]

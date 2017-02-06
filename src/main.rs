@@ -5,12 +5,17 @@ extern crate env_logger;
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_curl;
+
 #[macro_use]
 extern crate clap;
 extern crate chrono;
 extern crate histogram;
 
+#[macro_use]
+extern crate quickcheck;
+
 mod args;
+mod misc;
 
 use args::{Config, parse_args};
 
@@ -129,17 +134,19 @@ impl Boss {
                            duration: Duration)
                            -> RunInfo {
         let (tx, rx) = channel();
-        for _ in 0..self.num_threads {
+        let desired_connections_per_worker_iter = misc::split_number(desired_connections,
+                                                                     self.num_threads);
+        // start num_threads workers
+        for desired_connections_per_worker in desired_connections_per_worker_iter {
             let tx = tx.clone();
             let url = url.clone();
             thread::spawn(move || {
-
                 let mut lp = Core::new().unwrap();
                 let start_time = Local::now();
                 let wanted_end_time = start_time + duration;
                 let session = Session::new(lp.handle());
 
-                let iterator = (0..desired_connections).map(|_| {
+                let iterator = (0..desired_connections_per_worker).map(|_| {
                     let mut easy_request = Easy::new();
                     easy_request.get(true).unwrap();
                     easy_request.url(&url).unwrap();
