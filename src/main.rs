@@ -19,7 +19,7 @@ use futures::{Future, stream};
 use futures::future::{ok, loop_fn, Loop};
 use futures::Stream;
 use tokio_core::reactor::Core;
-use tokio_curl::{PerformError, Session};
+use tokio_curl::Session;
 use chrono::*;
 use std::sync::mpsc::channel;
 use histogram::*;
@@ -64,26 +64,27 @@ impl Worker {
         self.histogram.merge(&other.histogram);
     }
 
-    fn send_request(mut self, easy_request: Easy, session: &Session) -> impl Future<Item=RequestResult, Error=PerformError> {
+    fn send_request(mut self,
+                    easy_request: Easy,
+                    session: &Session)
+                    -> impl Future<Item = RequestResult, Error = ()> {
         session.perform(easy_request)
-            .then(|res| {
-                match res {
-                    Ok(mut easy) => {
-                        self.num_requests += 1;
-                        easy.total_time()
-                            .ok()
-                            .and_then(|x| Duration::from_std(x).ok())
-                            .and_then(|latency| {
-                                latency.num_nanoseconds()
-                                    .map(|x| self.histogram.increment(x as u64).ok())
-                            });
-                        let request_result = RequestResult::new(self, easy);
-                        Ok(request_result)
-                    }
-                    Err(error) => {
-                        self.num_failed_requests += 1;
-                        Err(error)
-                    }
+            .then(|res| match res {
+                Ok(mut easy) => {
+                    self.num_requests += 1;
+                    easy.total_time()
+                        .ok()
+                        .and_then(|x| Duration::from_std(x).ok())
+                        .and_then(|latency| {
+                            latency.num_nanoseconds()
+                                .map(|x| self.histogram.increment(x as u64).ok())
+                        });
+                    let request_result = RequestResult::new(self, easy);
+                    Ok(request_result)
+                }
+                Err(_) => {
+                    self.num_failed_requests += 1;
+                    Err(())
                 }
             })
     }
