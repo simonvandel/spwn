@@ -5,7 +5,6 @@ extern crate env_logger;
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_curl;
-extern crate threadpool;
 #[macro_use]
 extern crate clap;
 extern crate chrono;
@@ -21,10 +20,10 @@ use futures::future::{ok, loop_fn, Loop};
 use futures::{Stream};
 use tokio_core::reactor::{Core};
 use tokio_curl::{PerformError, Session};
-use threadpool::ThreadPool;
 use chrono::*;
 use std::sync::mpsc::channel;
 use histogram::*;
+use std::thread;
 
 struct RequestResult {
     /// The worker that processed the request
@@ -106,8 +105,6 @@ struct Boss {
     pub requests_completed: usize,
     /// Number of active connections
     pub connections: usize,
-
-    thread_pool: ThreadPool,
     num_threads: usize,
 }
 
@@ -116,7 +113,6 @@ impl Boss {
         Boss {
             requests_completed: 0,
             connections: 0,
-            thread_pool: ThreadPool::new(num_threads),
             num_threads: num_threads,
         }
     }
@@ -126,7 +122,7 @@ impl Boss {
         for _ in 0..self.num_threads {
             let tx = tx.clone();
             let url = url.clone();
-            self.thread_pool.execute(move || {
+            thread::spawn(move || {
                 
                 let mut lp = Core::new().unwrap();
                 let start_time = Local::now();
