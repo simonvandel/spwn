@@ -12,6 +12,7 @@ extern crate chrono;
 extern crate histogram;
 
 #[macro_use]
+#[cfg(test)]
 extern crate quickcheck;
 
 mod args;
@@ -24,75 +25,40 @@ use futures::{Future, stream};
 use futures::future::{ok, loop_fn, Loop};
 use futures::Stream;
 use tokio_core::reactor::Core;
-use tokio_curl::Session;
+use tokio_curl::{Session, PerformError};
 use chrono::*;
 use std::sync::mpsc::channel;
 use histogram::*;
 use std::thread;
 
 struct RequestResult {
-    /// The worker that processed the request
-    worker: Worker,
-    /// The curl easy response to the request
-    curl_easy: Easy,
+    latency: Duration,
 }
 
 impl RequestResult {
-    fn new(worker: Worker, curl_easy: Easy) -> Self {
-        RequestResult {
-            worker: worker,
-            curl_easy: curl_easy,
-        }
+    fn new(latency: Duration) -> Self {
+        RequestResult { latency: latency }
     }
 }
 
-struct Worker {
-    /// Number of succesful requests this worker has made
-    num_requests: usize,
-    histogram: Histogram,
-    /// Number of failed requests this worker has made
-    num_failed_requests: usize,
+impl Default for RequestResult {
+    fn default() -> Self {
+        RequestResult { latency: Duration::zero() }
+    }
 }
 
-impl Worker {
-    pub fn new() -> Self {
-        Worker {
-            num_requests: 0,
-            histogram: Histogram::new(),
-            num_failed_requests: 0,
-        }
-    }
-
-    fn merge(&mut self, other: &Self) {
-        self.num_requests += other.num_requests;
-        self.num_failed_requests += other.num_failed_requests;
-        self.histogram.merge(&other.histogram);
-    }
-
-    fn send_request(mut self,
-                    easy_request: Easy,
-                    session: &Session)
-                    -> impl Future<Item = RequestResult, Error = ()> {
-        session.perform(easy_request)
-            .then(|res| match res {
-                Ok(mut easy) => {
-                    self.num_requests += 1;
-                    easy.total_time()
-                        .ok()
-                        .and_then(|x| Duration::from_std(x).ok())
-                        .and_then(|latency| {
-                            latency.num_nanoseconds()
-                                .map(|x| self.histogram.increment(x as u64).ok())
-                        });
-                    let request_result = RequestResult::new(self, easy);
-                    Ok(request_result)
-                }
-                Err(_) => {
-                    self.num_failed_requests += 1;
-                    Err(())
-                }
-            })
-    }
+fn send_request(easy_request: Easy,
+                session: &Session)
+                -> impl Future<Item = (RequestResult, Easy), Error = PerformError> {
+    session.perform(easy_request)
+        .and_then(|mut easy| {
+            let latency = easy.total_time()
+                .ok()
+                .and_then(|x| Duration::from_std(x).ok())
+                .unwrap();
+            let request_result = RequestResult::new(latency);
+            Ok((request_result, easy))
+        })
 }
 
 struct RunInfo {
@@ -105,8 +71,22 @@ struct RunInfo {
 }
 
 impl RunInfo {
+    fn new(duration: Duration) -> Self {
+        RunInfo {
+            requests_completed: 0,
+            num_failed_requests: 0,
+            duration: duration,
+            histogram: Histogram::new(),
+        }
+    }
     pub fn requests_per_second(&self) -> f32 {
         (self.requests_completed as f32) / (self.duration.num_seconds() as f32)
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.requests_completed += other.requests_completed;
+        self.num_failed_requests += other.num_failed_requests;
+        self.histogram.merge(&other.histogram);
     }
 }
 
@@ -117,6 +97,13 @@ struct Boss {
     /// Number of active connections
     pub connections: usize,
     num_threads: usize,
+}
+
+fn make_easy(url: &str) -> Easy {
+    let mut easy_request = Easy::new();
+    easy_request.get(true).unwrap();
+    easy_request.url(&url).unwrap();
+    easy_request
 }
 
 impl Boss {
@@ -147,46 +134,64 @@ impl Boss {
                 let session = Session::new(lp.handle());
 
                 let iterator = (0..desired_connections_per_worker).map(|_| {
-                    let mut easy_request = Easy::new();
-                    easy_request.get(true).unwrap();
-                    easy_request.url(&url).unwrap();
-                    let request_result = RequestResult::new(Worker::new(), easy_request);
-                    loop_fn(request_result, |request_result| {
-                        request_result.worker.send_request(request_result.curl_easy, &session)
-                            .and_then(|state| {
-                                let now_time = Local::now();
-                                if now_time < wanted_end_time {
-                                    Ok(Loop::Continue(state))
-                                } else {
-                                    Ok(Loop::Break(state))
+
+                    let runinfo = RunInfo::new(duration);
+                    let easy_request = make_easy(&url);
+                    loop_fn((runinfo, easy_request), |(mut runinfo, easy_request)| {
+                        send_request(easy_request, &session)
+                            .then(|res| -> Result<_, ()> { match res {
+                                // on request success
+                                Ok((request_res, easy_request)) => {
+                                    // update histogram
+                                    request_res.latency.num_nanoseconds()
+                                        .map(|x| runinfo.histogram.increment(x as u64).ok());
+                                    runinfo.requests_completed += 1;
+
+                                    let state = (runinfo, easy_request);
+
+                                    let now_time = Local::now();
+                                    if now_time < wanted_end_time {
+                                        Ok(Loop::Continue(state))
+                                    } else {
+                                        Ok(Loop::Break(state))
+                                    }
                                 }
-                            })
+                                // on request failure
+                                Err(mut err) => {
+                                    runinfo.num_failed_requests += 1;
+                                    // attempt to recover the easy handle from the error,
+                                    // else make a new handle
+                                    let easy_request = err.take_easy().unwrap_or(make_easy(&url));
+                                    let state = (runinfo, easy_request);
+                                    let now_time = Local::now();
+                                    if now_time < wanted_end_time {
+                                        Ok(Loop::Continue(state))
+                                    } else {
+                                        Ok(Loop::Break(state))
+                                    }
+                                }
+                            }})
+                            .map_err(|_| ())
                     })
-                        // Extract worker statistics
-                        .map(|request_res| request_res.worker)
+                        // Extract latency histogram
+                        .map(|(histogram, _)| histogram)
                 });
                 let future = stream::futures_unordered(iterator)
-                    .fold(Worker::new(), |mut worker_acc, worker| {
-                        worker_acc.merge(&worker);
-                        ok(worker_acc)
+                    .fold(RunInfo::new(duration), |mut runinfo_acc, runinfo| {
+                        runinfo_acc.merge(&runinfo);
+                        ok(runinfo_acc)
                     });
                 let res = lp.run(future).unwrap();
                 tx.send(res).unwrap();
             });
         }
         // collect information from all workers
-        let worker_info: Worker = rx.iter()
+        rx.iter()
             .take(self.num_threads)
-            .fold(Worker::new(), |mut worker_acc, worker| {
-                worker_acc.merge(&worker);
-                worker_acc
-            });
-        RunInfo {
-            requests_completed: worker_info.num_requests,
-            num_failed_requests: worker_info.num_failed_requests,
-            duration: duration,
-            histogram: worker_info.histogram,
-        }
+            .fold(RunInfo::new(duration), |mut runinfo_acc, runinfo| {
+                runinfo_acc.merge(&runinfo);
+                runinfo_acc
+            })
     }
 }
 

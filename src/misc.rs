@@ -1,3 +1,4 @@
+#[cfg(test)]
 use quickcheck::TestResult;
 
 /// Splits the given number such that no fractions are wasted and
@@ -34,6 +35,7 @@ fn split_number3() {
     assert_eq!(split_number(7, 4), vec![2, 2, 2, 1]);
 }
 
+#[cfg(test)]
 quickcheck! {
     fn split_number_sum_same(to_split: usize, in_pieces: usize) -> TestResult {
         if in_pieces < 1 {
