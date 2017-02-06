@@ -26,6 +26,18 @@ use chrono::*;
 use std::sync::mpsc::channel;
 use histogram::*;
 
+struct RequestResult {
+    /// The worker that processed the request
+    worker: Worker,
+    /// The curl easy response to the request
+    curl_easy: Easy,
+}
+
+impl RequestResult {
+    fn new(worker: Worker, curl_easy: Easy) -> Self {
+        RequestResult {worker: worker, curl_easy: curl_easy}
+    }
+}
 
 struct Worker {
     /// Number of succesful requests this worker has made
@@ -40,7 +52,13 @@ impl Worker {
         Worker { num_requests: 0, histogram: Histogram::new(), num_failed_requests: 0}
     }
 
-    fn send_request(mut self, easy_request: Easy, session: &Session) -> impl Future<Item=(Self, Easy), Error=PerformError> {
+    fn merge(&mut self, other: &Self) {
+        self.num_requests += other.num_requests;
+        self.num_failed_requests += other.num_failed_requests;
+        self.histogram.merge(&other.histogram);
+    }
+
+    fn send_request(mut self, easy_request: Easy, session: &Session) -> impl Future<Item=RequestResult, Error=PerformError> {
         session.perform(easy_request)
             .then(|res| {
                 match res {
@@ -55,8 +73,8 @@ impl Worker {
                                 latency.num_nanoseconds()
                                     .map(|x| self.histogram.increment(x as u64).ok())
                             });
-                        
-                        Ok((self, easy))
+                        let request_result = RequestResult::new(self, easy);
+                        Ok(request_result)
                     },
                     Err(error) => {
                         self.num_failed_requests += 1;
@@ -119,8 +137,9 @@ impl Boss {
                     let mut easy_request = Easy::new();
                     easy_request.get(true).unwrap();
                     easy_request.url(&url).unwrap();
-                    loop_fn((Worker::new(), easy_request), |(worker, easy)| {
-                        worker.send_request(easy, &session)
+                    let request_result = RequestResult::new(Worker::new(), easy_request);
+                    loop_fn(request_result, |request_result| {
+                        request_result.worker.send_request(request_result.curl_easy, &session)
                             .and_then(|state| {
                                 let now_time = Local::now();
                                 if now_time < wanted_end_time {
@@ -130,25 +149,28 @@ impl Boss {
                                 }
                             })
                     })
+                        // Extract worker statistics
+                        .map(|request_res| request_res.worker)
                 });
                 let future = stream::futures_unordered(iterator)
-                    .fold((0, 0, Histogram::new()), |(request_acc, request_failed_acc, _), (res, _)|  {
-                        let requests = request_acc + res.num_requests;
-                        let requests_failed = request_failed_acc + res.num_failed_requests;
-                        ok((requests, requests_failed, res.histogram))
+                    .fold(Worker::new(), |mut worker_acc, worker|  {
+                        worker_acc.merge(&worker);
+                        ok(worker_acc)
                     });
                 let res = lp.run(future).unwrap();
                 tx.send(res).unwrap();
             });
         }
-        // collect information from all threads
-        let (total_num_requests, requests_failed, histogram): (usize, usize, Histogram) = rx.iter().take(self.num_threads).fold((0, 0, Histogram::new()), |(request_acc, request_failed_acc, mut histogram_acc), (request, request_failed, histogram)|  {
-                        let requests = request_acc + request;
-                        let requests_failed = request_failed_acc + request_failed;
-                        histogram_acc.merge(&histogram);
-                        (requests, requests_failed, histogram_acc)
+        // collect information from all workers
+        let worker_info: Worker = 
+            rx
+                .iter()
+                .take(self.num_threads)
+                .fold(Worker::new(), |mut worker_acc, worker|  {
+                        worker_acc.merge(&worker);
+                        worker_acc
                     });
-        RunInfo {requests_completed: total_num_requests, num_failed_requests: requests_failed, duration: duration, histogram: histogram}
+        RunInfo {requests_completed: worker_info.num_requests, num_failed_requests: worker_info.num_failed_requests, duration: duration, histogram: worker_info.histogram}
     }
 }
 
