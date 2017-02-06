@@ -6,7 +6,7 @@ pub struct Config {
     pub url: String,
     pub num_threads: usize,
     pub num_connections: usize,
-    pub duration: Duration
+    pub duration: Duration,
 }
 
 fn integer_validator<E>(input: String, error_message: E) -> Result<(), String>
@@ -51,7 +51,6 @@ pub fn parse_args() -> Config {
         url: matches.value_of("url").unwrap().into(),
         num_threads: num_threads,
         num_connections: num_connections,
-        duration: Duration::seconds(duration_seconds)
+        duration: Duration::seconds(duration_seconds),
     }
 }
-

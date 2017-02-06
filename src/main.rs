@@ -17,8 +17,8 @@ use args::{Config, parse_args};
 use curl::easy::Easy;
 use futures::{Future, stream};
 use futures::future::{ok, loop_fn, Loop};
-use futures::{Stream};
-use tokio_core::reactor::{Core};
+use futures::Stream;
+use tokio_core::reactor::Core;
 use tokio_curl::{PerformError, Session};
 use chrono::*;
 use std::sync::mpsc::channel;
@@ -34,7 +34,10 @@ struct RequestResult {
 
 impl RequestResult {
     fn new(worker: Worker, curl_easy: Easy) -> Self {
-        RequestResult {worker: worker, curl_easy: curl_easy}
+        RequestResult {
+            worker: worker,
+            curl_easy: curl_easy,
+        }
     }
 }
 
@@ -48,7 +51,11 @@ struct Worker {
 
 impl Worker {
     pub fn new() -> Self {
-        Worker { num_requests: 0, histogram: Histogram::new(), num_failed_requests: 0}
+        Worker {
+            num_requests: 0,
+            histogram: Histogram::new(),
+            num_failed_requests: 0,
+        }
     }
 
     fn merge(&mut self, other: &Self) {
@@ -65,16 +72,14 @@ impl Worker {
                         self.num_requests += 1;
                         easy.total_time()
                             .ok()
-                            .and_then(|x| 
-                                Duration::from_std(x).ok()
-                            )
+                            .and_then(|x| Duration::from_std(x).ok())
                             .and_then(|latency| {
                                 latency.num_nanoseconds()
                                     .map(|x| self.histogram.increment(x as u64).ok())
                             });
                         let request_result = RequestResult::new(self, easy);
                         Ok(request_result)
-                    },
+                    }
                     Err(error) => {
                         self.num_failed_requests += 1;
                         Err(error)
@@ -117,18 +122,22 @@ impl Boss {
         }
     }
 
-    pub fn start_workforce(&self, desired_connections: usize, url: String, duration: Duration) -> RunInfo {
+    pub fn start_workforce(&self,
+                           desired_connections: usize,
+                           url: String,
+                           duration: Duration)
+                           -> RunInfo {
         let (tx, rx) = channel();
         for _ in 0..self.num_threads {
             let tx = tx.clone();
             let url = url.clone();
             thread::spawn(move || {
-                
+
                 let mut lp = Core::new().unwrap();
                 let start_time = Local::now();
                 let wanted_end_time = start_time + duration;
                 let session = Session::new(lp.handle());
-                
+
                 let iterator = (0..desired_connections).map(|_| {
                     let mut easy_request = Easy::new();
                     easy_request.get(true).unwrap();
@@ -149,7 +158,7 @@ impl Boss {
                         .map(|request_res| request_res.worker)
                 });
                 let future = stream::futures_unordered(iterator)
-                    .fold(Worker::new(), |mut worker_acc, worker|  {
+                    .fold(Worker::new(), |mut worker_acc, worker| {
                         worker_acc.merge(&worker);
                         ok(worker_acc)
                     });
@@ -158,15 +167,18 @@ impl Boss {
             });
         }
         // collect information from all workers
-        let worker_info: Worker = 
-            rx
-                .iter()
-                .take(self.num_threads)
-                .fold(Worker::new(), |mut worker_acc, worker|  {
-                        worker_acc.merge(&worker);
-                        worker_acc
-                    });
-        RunInfo {requests_completed: worker_info.num_requests, num_failed_requests: worker_info.num_failed_requests, duration: duration, histogram: worker_info.histogram}
+        let worker_info: Worker = rx.iter()
+            .take(self.num_threads)
+            .fold(Worker::new(), |mut worker_acc, worker| {
+                worker_acc.merge(&worker);
+                worker_acc
+            });
+        RunInfo {
+            requests_completed: worker_info.num_requests,
+            num_failed_requests: worker_info.num_failed_requests,
+            duration: duration,
+            histogram: worker_info.histogram,
+        }
     }
 }
 
@@ -182,7 +194,9 @@ fn nanoseconds_to_milliseconds(nanoseconds: u64) -> f64 {
 /// Presents the results to the user
 fn present(run_info: RunInfo) {
     let requests_completed = run_info.requests_completed;
-    println!("{} requests in {}s", requests_completed, run_info.duration.num_seconds());
+    println!("{} requests in {}s",
+             requests_completed,
+             run_info.duration.num_seconds());
     println!("{} failed requests", run_info.num_failed_requests);
     println!("Requests per second: {}", run_info.requests_per_second());
     println!("Latency distribution: \n50%: {} ms\n75%: {} ms\n90%: {} ms\n95%: {} ms\n99%: {} ms",
