@@ -212,13 +212,18 @@ fn present(run_info: RunInfo) {
              run_info.duration.num_seconds());
     println!("{} failed requests", run_info.num_failed_requests);
     println!("Requests per second: {}", run_info.requests_per_second());
-    println!("Latency distribution: \n50%: {} ms\n75%: {} ms\n90%: {} ms\n95%: {} ms\n99%: {} ms",
-        run_info.histogram.percentile(50.0).map(nanoseconds_to_milliseconds).unwrap(),
-        run_info.histogram.percentile(75.0).map(nanoseconds_to_milliseconds).unwrap(),
-        run_info.histogram.percentile(90.0).map(nanoseconds_to_milliseconds).unwrap(),
-        run_info.histogram.percentile(95.0).map(nanoseconds_to_milliseconds).unwrap(),
-        run_info.histogram.percentile(99.0).map(nanoseconds_to_milliseconds).unwrap(),
-    );
+
+    // we can only print the latency distribution if there is data in the histogram
+    if run_info.histogram.entries() > 0 {
+        println!("Latency distribution: \n50%: {} ms\n75%: {} ms\n90%: {} ms\n95%: {} ms\n99%: {} ms",
+            run_info.histogram.percentile(50.0).map(nanoseconds_to_milliseconds).unwrap(),
+            run_info.histogram.percentile(75.0).map(nanoseconds_to_milliseconds).unwrap(),
+            run_info.histogram.percentile(90.0).map(nanoseconds_to_milliseconds).unwrap(),
+            run_info.histogram.percentile(95.0).map(nanoseconds_to_milliseconds).unwrap(),
+            run_info.histogram.percentile(99.0).map(nanoseconds_to_milliseconds).unwrap(),
+        );
+    }
+
 }
 
 fn main() {
