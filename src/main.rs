@@ -99,10 +99,11 @@ struct Boss {
     num_threads: usize,
 }
 
-fn make_easy(url: &str) -> Easy {
+fn make_easy(url: &str, timeout: Duration) -> Easy {
     let mut easy_request = Easy::new();
     easy_request.get(true).unwrap();
     easy_request.url(&url).unwrap();
+    easy_request.timeout(timeout.to_std().unwrap()).unwrap();
     easy_request
 }
 
@@ -118,7 +119,8 @@ impl Boss {
     pub fn start_workforce(&self,
                            desired_connections: usize,
                            url: String,
-                           duration: Duration)
+                           duration: Duration,
+                           timeout: Duration)
                            -> RunInfo {
         let (tx, rx) = channel();
         let desired_connections_per_worker_iter = misc::split_number(desired_connections,
@@ -136,7 +138,7 @@ impl Boss {
                 let iterator = (0..desired_connections_per_worker).map(|_| {
 
                     let runinfo = RunInfo::new(duration);
-                    let easy_request = make_easy(&url);
+                    let easy_request = make_easy(&url, timeout);
                     loop_fn((runinfo, easy_request), |(mut runinfo, easy_request)| {
                         send_request(easy_request, &session)
                             .then(|res| -> Result<_, ()> { match res {
@@ -161,7 +163,7 @@ impl Boss {
                                     runinfo.num_failed_requests += 1;
                                     // attempt to recover the easy handle from the error,
                                     // else make a new handle
-                                    let easy_request = err.take_easy().unwrap_or(make_easy(&url));
+                                    let easy_request = err.take_easy().unwrap_or(make_easy(&url, timeout));
                                     let state = (runinfo, easy_request);
                                     let now_time = Local::now();
                                     if now_time < wanted_end_time {
@@ -197,7 +199,7 @@ impl Boss {
 
 fn start(config: Config) -> RunInfo {
     let boss = Boss::new(config.num_threads);
-    boss.start_workforce(config.num_connections, config.url, config.duration)
+    boss.start_workforce(config.num_connections, config.url, config.duration, config.timeout)
 }
 
 fn nanoseconds_to_milliseconds(nanoseconds: u64) -> f64 {
