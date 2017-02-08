@@ -161,7 +161,8 @@ impl Boss {
                                     runinfo.num_failed_requests += 1;
                                     // attempt to recover the easy handle from the error,
                                     // else make a new handle
-                                    let easy_request = err.take_easy().unwrap_or_else(|| make_easy(&url, timeout));
+                                    let easy_request = err.take_easy()
+                                        .unwrap_or_else(|| make_easy(&url, timeout));
                                     let state = (runinfo, easy_request);
                                     let now_time = Local::now();
                                     if now_time < wanted_end_time {
