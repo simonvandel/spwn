@@ -44,7 +44,6 @@ pub fn parse_args() -> Config {
             .default_value("10")
             .validator(|i| integer_validator(i, "Timeout must be an integer"))
             .help("Timeout in seconds to run"))
-            // TODO: make it possible to write -d10m for 10 minutes
         .get_matches();
 
     // this can be unwrapped, as the validator should guarantee the argument is an integer
@@ -59,6 +58,6 @@ pub fn parse_args() -> Config {
         num_threads: num_threads,
         num_connections: num_connections,
         duration: Duration::seconds(duration_seconds),
-        timeout: Duration::seconds(timeout_seconds)
+        timeout: Duration::seconds(timeout_seconds),
     }
 }
