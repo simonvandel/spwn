@@ -102,7 +102,7 @@ struct Boss {
 fn make_easy(url: &str, timeout: Duration) -> Easy {
     let mut easy_request = Easy::new();
     easy_request.get(true).unwrap();
-    easy_request.url(&url).unwrap();
+    easy_request.url(url).unwrap();
     easy_request.timeout(timeout.to_std().unwrap()).unwrap();
     easy_request
 }
@@ -161,7 +161,7 @@ impl Boss {
                                     runinfo.num_failed_requests += 1;
                                     // attempt to recover the easy handle from the error,
                                     // else make a new handle
-                                    let easy_request = err.take_easy().unwrap_or(make_easy(&url, timeout));
+                                    let easy_request = err.take_easy().unwrap_or_else(|| make_easy(&url, timeout));
                                     let state = (runinfo, easy_request);
                                     let now_time = Local::now();
                                     if now_time < wanted_end_time {
