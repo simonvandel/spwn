@@ -116,20 +116,18 @@ impl Boss {
         }
     }
 
-    pub fn start_workforce(&self,
-                           desired_connections: usize,
-                           url: String,
-                           duration: Duration,
-                           timeout: Duration)
-                           -> RunInfo {
+    pub fn start_workforce(&self, config: &Config) -> RunInfo {
         let (tx, rx) = channel();
-        let desired_connections_per_worker_iter = misc::split_number(desired_connections,
+        let desired_connections_per_worker_iter = misc::split_number(config.num_connections,
                                                                      self.num_threads);
         // start num_threads workers
         for desired_connections_per_worker in desired_connections_per_worker_iter {
             let tx = tx.clone();
-            let url = url.clone();
+            let url = config.url.clone();
+            let duration = config.duration;
+            let timeout = config.timeout;
             thread::spawn(move || {
+
                 let mut lp = Core::new().unwrap();
                 let start_time = Local::now();
                 let wanted_end_time = start_time + duration;
@@ -190,7 +188,7 @@ impl Boss {
         // collect information from all workers
         rx.iter()
             .take(self.num_threads)
-            .fold(RunInfo::new(duration), |mut runinfo_acc, runinfo| {
+            .fold(RunInfo::new(config.duration), |mut runinfo_acc, runinfo| {
                 runinfo_acc.merge(&runinfo);
                 runinfo_acc
             })
@@ -199,7 +197,7 @@ impl Boss {
 
 fn start(config: Config) -> RunInfo {
     let boss = Boss::new(config.num_threads);
-    boss.start_workforce(config.num_connections, config.url, config.duration, config.timeout)
+    boss.start_workforce(&config)
 }
 
 fn nanoseconds_to_milliseconds(nanoseconds: u64) -> f64 {
