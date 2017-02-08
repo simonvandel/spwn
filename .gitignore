@@ -2,3 +2,4 @@ target
 perf.data*
 callgrind.out.*
 *.rs.bk
+.DS_Store
