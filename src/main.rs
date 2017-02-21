@@ -1,15 +1,16 @@
 #![feature(conservative_impl_trait)]
 
-extern crate curl;
 extern crate env_logger;
 extern crate futures;
 extern crate tokio_core;
-extern crate tokio_curl;
 
 #[macro_use]
 extern crate clap;
 extern crate chrono;
 extern crate histogram;
+extern crate hyper;
+extern crate stopwatch;
+
 
 #[macro_use]
 #[cfg(test)]
@@ -20,16 +21,17 @@ mod misc;
 
 use args::{Config, parse_args};
 
-use curl::easy::Easy;
 use futures::{Future, stream};
 use futures::future::{ok, loop_fn, Loop};
 use futures::Stream;
 use tokio_core::reactor::Core;
-use tokio_curl::{Session, PerformError};
 use chrono::*;
 use std::sync::mpsc::channel;
 use histogram::*;
 use std::thread;
+use hyper::{Client, Url};
+use std::str::FromStr;
+use stopwatch::Stopwatch;
 
 struct RequestResult {
     latency: Duration,
@@ -47,18 +49,26 @@ impl Default for RequestResult {
     }
 }
 
-fn send_request(easy_request: Easy,
-                session: &Session)
-                -> impl Future<Item = (RequestResult, Easy), Error = PerformError> {
-    session.perform(easy_request)
-        .and_then(|mut easy| {
-            let latency = easy.total_time()
-                .ok()
-                .and_then(|x| Duration::from_std(x).ok())
-                .unwrap();
-            let request_result = RequestResult::new(latency);
-            Ok((request_result, easy))
+fn stopwatch<F, I, E>(future: F) -> impl Future<Item = (I, Duration), Error = E>
+    where F: Future<Item = I, Error = E>
+{
+    let sw = Stopwatch::start_new();
+    future.then(move |res| {
+        res.map(move |x| {
+            (x, Duration::from_std(sw.elapsed()).expect("Could not convert latency from std time"))
         })
+    })
+}
+
+fn send_request<C>(url: Url,
+                   hyper_client: &Client<C>)
+                   -> impl Future<Item = RequestResult, Error = hyper::Error>
+    where C: hyper::client::Connect
+{
+    stopwatch(hyper_client.get(url)).and_then(|(_, latency)| {
+        let request_result = RequestResult::new(latency);
+        Ok(request_result)
+    })
 }
 
 struct RunInfo {
@@ -99,14 +109,6 @@ struct Boss {
     num_threads: usize,
 }
 
-fn make_easy(url: &str, timeout: Duration) -> Easy {
-    let mut easy_request = Easy::new();
-    easy_request.get(true).unwrap();
-    easy_request.url(url).unwrap();
-    easy_request.timeout(timeout.to_std().unwrap()).unwrap();
-    easy_request
-}
-
 impl Boss {
     pub fn new(num_threads: usize) -> Self {
         Boss {
@@ -125,29 +127,32 @@ impl Boss {
             let tx = tx.clone();
             let url = config.url.clone();
             let duration = config.duration;
-            let timeout = config.timeout;
+            let timeout = config.timeout.to_std().unwrap();
             thread::spawn(move || {
 
                 let mut lp = Core::new().unwrap();
                 let start_time = Local::now();
                 let wanted_end_time = start_time + duration;
-                let session = Session::new(lp.handle());
+                let hyper_client = hyper::Client::configure()
+                    .keep_alive_timeout(Some(timeout))
+                    .build(&lp.handle());
+                let hyper_url = Url::from_str(&url).expect("Invalid URL");
 
                 let iterator = (0..desired_connections_per_worker).map(|_| {
 
                     let runinfo = RunInfo::new(duration);
-                    let easy_request = make_easy(&url, timeout);
-                    loop_fn((runinfo, easy_request), |(mut runinfo, easy_request)| {
-                        send_request(easy_request, &session)
+
+                    loop_fn((runinfo), |mut runinfo| {
+                        send_request(hyper_url.clone(), &hyper_client)
                             .then(|res| -> Result<_, ()> { match res {
                                 // on request success
-                                Ok((request_res, easy_request)) => {
+                                Ok(request_res) => {
                                     // update histogram
                                     request_res.latency.num_nanoseconds()
                                         .map(|x| runinfo.histogram.increment(x as u64).ok());
                                     runinfo.requests_completed += 1;
 
-                                    let state = (runinfo, easy_request);
+                                    let state = runinfo;
 
                                     let now_time = Local::now();
                                     if now_time < wanted_end_time {
@@ -157,13 +162,9 @@ impl Boss {
                                     }
                                 }
                                 // on request failure
-                                Err(mut err) => {
+                                Err(_) => {
                                     runinfo.num_failed_requests += 1;
-                                    // attempt to recover the easy handle from the error,
-                                    // else make a new handle
-                                    let easy_request = err.take_easy()
-                                        .unwrap_or_else(|| make_easy(&url, timeout));
-                                    let state = (runinfo, easy_request);
+                                    let state = runinfo;
                                     let now_time = Local::now();
                                     if now_time < wanted_end_time {
                                         Ok(Loop::Continue(state))
@@ -174,7 +175,7 @@ impl Boss {
                             }})
                     })
                         // Extract latency histogram
-                        .map(|(histogram, _)| histogram)
+                        .map(|histogram| histogram)
                 });
                 let future = stream::futures_unordered(iterator)
                     .fold(RunInfo::new(duration), |mut runinfo_acc, runinfo| {
@@ -215,7 +216,8 @@ fn present(run_info: RunInfo) {
 
     // we can only print the latency distribution if there is data in the histogram
     if run_info.histogram.entries() > 0 {
-        println!("Average latency: {}ms", run_info.histogram.mean().map(nanoseconds_to_milliseconds).unwrap());
+        println!("Average latency: {}ms",
+                 run_info.histogram.mean().map(nanoseconds_to_milliseconds).unwrap());
         println!("Latency distribution: \n50%: {} ms\n75%: {} ms\n90%: {} ms\n95%: {} ms\n99%: {} ms",
             run_info.histogram.percentile(50.0).map(nanoseconds_to_milliseconds).unwrap(),
             run_info.histogram.percentile(75.0).map(nanoseconds_to_milliseconds).unwrap(),
@@ -223,7 +225,7 @@ fn present(run_info: RunInfo) {
             run_info.histogram.percentile(95.0).map(nanoseconds_to_milliseconds).unwrap(),
             run_info.histogram.percentile(99.0).map(nanoseconds_to_milliseconds).unwrap(),
         );
-        
+
     }
 
 }
