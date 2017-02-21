@@ -172,7 +172,6 @@ impl Boss {
                                     }
                                 }
                             }})
-                            .map_err(|_| ())
                     })
                         // Extract latency histogram
                         .map(|(histogram, _)| histogram)
@@ -216,6 +215,7 @@ fn present(run_info: RunInfo) {
 
     // we can only print the latency distribution if there is data in the histogram
     if run_info.histogram.entries() > 0 {
+        println!("Average latency: {}ms", run_info.histogram.mean().map(nanoseconds_to_milliseconds).unwrap());
         println!("Latency distribution: \n50%: {} ms\n75%: {} ms\n90%: {} ms\n95%: {} ms\n99%: {} ms",
             run_info.histogram.percentile(50.0).map(nanoseconds_to_milliseconds).unwrap(),
             run_info.histogram.percentile(75.0).map(nanoseconds_to_milliseconds).unwrap(),
@@ -223,6 +223,7 @@ fn present(run_info: RunInfo) {
             run_info.histogram.percentile(95.0).map(nanoseconds_to_milliseconds).unwrap(),
             run_info.histogram.percentile(99.0).map(nanoseconds_to_milliseconds).unwrap(),
         );
+        
     }
 
 }
