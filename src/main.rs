@@ -35,6 +35,7 @@ use hyper::{Client, Url};
 use std::str::FromStr;
 use futures_utils::stopwatch;
 use request_result::RequestResult;
+use misc::nanoseconds_to_milliseconds;
 
 fn send_request<C>(url: Url,
                    hyper_client: &Client<C>)
@@ -175,10 +176,6 @@ impl Boss {
 fn start(config: Config) -> RunInfo {
     let boss = Boss::new(config.num_threads);
     boss.start_workforce(&config)
-}
-
-fn nanoseconds_to_milliseconds(nanoseconds: u64) -> f64 {
-    nanoseconds as f64 / 1_000_000_f64
 }
 
 /// Presents the results to the user

@@ -1,6 +1,10 @@
 #[cfg(test)]
 use quickcheck::TestResult;
 
+pub fn nanoseconds_to_milliseconds(nanoseconds: u64) -> f64 {
+    nanoseconds as f64 / 1_000_000_f64
+}
+
 /// Splits the given number such that no fractions are wasted and
 /// the number is distributed evenly.
 /// Example: Splitting 10 in 4 pieces gives [2,2,3,3]
