@@ -18,6 +18,7 @@ extern crate quickcheck;
 
 mod args;
 mod misc;
+mod futures_utils;
 
 use args::{Config, parse_args};
 
@@ -31,7 +32,7 @@ use histogram::*;
 use std::thread;
 use hyper::{Client, Url};
 use std::str::FromStr;
-use stopwatch::Stopwatch;
+use futures_utils::stopwatch;
 
 struct RequestResult {
     latency: Duration,
@@ -47,17 +48,6 @@ impl Default for RequestResult {
     fn default() -> Self {
         RequestResult { latency: Duration::zero() }
     }
-}
-
-fn stopwatch<F, I, E>(future: F) -> impl Future<Item = (I, Duration), Error = E>
-    where F: Future<Item = I, Error = E>
-{
-    let sw = Stopwatch::start_new();
-    future.then(move |res| {
-        res.map(move |x| {
-            (x, Duration::from_std(sw.elapsed()).expect("Could not convert latency from std time"))
-        })
-    })
 }
 
 fn send_request<C>(url: Url,
