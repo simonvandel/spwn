@@ -50,7 +50,7 @@ impl Boss {
             let wanted_end_time = start_time + duration;
             thread::spawn(move || {
 
-                let mut core = Core::new().unwrap();             
+                let mut core = Core::new().unwrap();
                 let hyper_client = hyper::Client::configure()
                     .keep_alive_timeout(Some(timeout))
                     .build(&core.handle());
@@ -102,30 +102,28 @@ fn create_looping_worker<'a>(duration: Duration,
                         .num_nanoseconds()
                         .map(|x| runinfo.histogram.increment(x as u64).ok());
                     runinfo.requests_completed += 1;
-
-                    let state = runinfo;
-
-                    let now_time = Local::now();
-                    if now_time < wanted_end_time {
-                        Ok(Loop::Continue(state))
-                    } else {
-                        Ok(Loop::Break(state))
-                    }
+                    loop_iter(runinfo, wanted_end_time)
                 }
                 // on request failure
                 Err(_) => {
                     runinfo.num_failed_requests += 1;
-                    let state = runinfo;
-                    let now_time = Local::now();
-                    if now_time < wanted_end_time {
-                        Ok(Loop::Continue(state))
-                    } else {
-                        Ok(Loop::Break(state))
-                    }
+                    loop_iter(runinfo, wanted_end_time)
                 }
             }
         })
     })
+}
+
+/// Determines what the next loop iteration should be; Continue or break.
+fn loop_iter(state: RunInfo,
+             wanted_end_time: DateTime<Local>)
+             -> impl Future<Item = Loop<RunInfo, RunInfo>, Error = ()> {
+    let now_time = Local::now();
+    if now_time < wanted_end_time {
+        ok(Loop::Continue(state))
+    } else {
+        ok(Loop::Break(state))
+    }
 }
 
 fn send_request<C>(url: Url,
