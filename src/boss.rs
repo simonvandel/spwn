@@ -1,12 +1,12 @@
 extern crate hyper;
 
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 use args::Config;
 use run_info::RunInfo;
 use misc::split_number;
 use tokio_core::reactor::Core;
-use chrono::Local;
+use chrono::{Duration, Local};
 use hyper::{Client, Url};
 use std::str::FromStr;
 
@@ -46,12 +46,12 @@ impl Boss {
             let timeout = config.timeout.to_std().unwrap();
             thread::spawn(move || {
 
-                let mut lp = Core::new().unwrap();
+                let mut core = Core::new().unwrap();
                 let start_time = Local::now();
                 let wanted_end_time = start_time + duration;
                 let hyper_client = hyper::Client::configure()
                     .keep_alive_timeout(Some(timeout))
-                    .build(&lp.handle());
+                    .build(&core.handle());
                 let hyper_url = Url::from_str(&url).expect("Invalid URL");
 
                 let iterator = (0..desired_connections_per_worker).map(|_| {
@@ -98,17 +98,22 @@ impl Boss {
                         runinfo_acc.merge(&runinfo);
                         ok(runinfo_acc)
                     });
-                let res = lp.run(future).unwrap();
+                let res = core.run(future).unwrap();
                 tx.send(res).unwrap();
             });
         }
-        // collect information from all workers
+        
+        self.collect_workers(rx, config.duration)
+    }
+
+    /// Collects information from all workers
+    fn collect_workers(&self, rx: Receiver<RunInfo>, run_duration: Duration) -> RunInfo {
         rx.iter()
-            .take(self.num_threads)
-            .fold(RunInfo::new(config.duration), |mut runinfo_acc, runinfo| {
-                runinfo_acc.merge(&runinfo);
-                runinfo_acc
-            })
+                .take(self.num_threads)
+                .fold(RunInfo::new(run_duration), |mut runinfo_acc, runinfo| {
+                    runinfo_acc.merge(&runinfo);
+                    runinfo_acc
+                })
     }
 }
 
