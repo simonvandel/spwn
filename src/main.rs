@@ -20,6 +20,7 @@ mod args;
 mod misc;
 mod futures_utils;
 mod request_result;
+mod run_info;
 
 use args::{Config, parse_args};
 
@@ -29,13 +30,13 @@ use futures::Stream;
 use tokio_core::reactor::Core;
 use chrono::*;
 use std::sync::mpsc::channel;
-use histogram::*;
 use std::thread;
 use hyper::{Client, Url};
 use std::str::FromStr;
 use futures_utils::stopwatch;
 use request_result::RequestResult;
 use misc::nanoseconds_to_milliseconds;
+use run_info::RunInfo;
 
 fn send_request<C>(url: Url,
                    hyper_client: &Client<C>)
@@ -46,35 +47,6 @@ fn send_request<C>(url: Url,
         let request_result = RequestResult::new(latency);
         Ok(request_result)
     })
-}
-
-struct RunInfo {
-    /// Number of requests successfully completed
-    pub requests_completed: usize,
-    pub duration: Duration,
-    histogram: Histogram,
-    /// Number of failed requests
-    num_failed_requests: usize,
-}
-
-impl RunInfo {
-    fn new(duration: Duration) -> Self {
-        RunInfo {
-            requests_completed: 0,
-            num_failed_requests: 0,
-            duration: duration,
-            histogram: Histogram::new(),
-        }
-    }
-    pub fn requests_per_second(&self) -> f32 {
-        (self.requests_completed as f32) / (self.duration.num_seconds() as f32)
-    }
-
-    fn merge(&mut self, other: &Self) {
-        self.requests_completed += other.requests_completed;
-        self.num_failed_requests += other.num_failed_requests;
-        self.histogram.merge(&other.histogram);
-    }
 }
 
 /// Delegates and manages all the work.
