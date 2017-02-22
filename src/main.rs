@@ -19,6 +19,7 @@ extern crate quickcheck;
 mod args;
 mod misc;
 mod futures_utils;
+mod request_result;
 
 use args::{Config, parse_args};
 
@@ -33,22 +34,7 @@ use std::thread;
 use hyper::{Client, Url};
 use std::str::FromStr;
 use futures_utils::stopwatch;
-
-struct RequestResult {
-    latency: Duration,
-}
-
-impl RequestResult {
-    fn new(latency: Duration) -> Self {
-        RequestResult { latency: latency }
-    }
-}
-
-impl Default for RequestResult {
-    fn default() -> Self {
-        RequestResult { latency: Duration::zero() }
-    }
-}
+use request_result::RequestResult;
 
 fn send_request<C>(url: Url,
                    hyper_client: &Client<C>)
