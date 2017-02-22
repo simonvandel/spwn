@@ -90,8 +90,6 @@ impl Boss {
                                 }
                             }})
                     })
-                        // Extract latency histogram
-                        .map(|histogram| histogram)
                 });
                 let future = stream::futures_unordered(iterator)
                     .fold(RunInfo::new(duration), |mut runinfo_acc, runinfo| {
