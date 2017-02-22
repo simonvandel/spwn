@@ -45,15 +45,15 @@ impl Boss {
             let url = config.url.clone();
             let duration = config.duration;
             let timeout = config.timeout.to_std().unwrap();
+            let hyper_url = Url::from_str(&url).expect("Invalid URL");
+            let start_time = Local::now();
+            let wanted_end_time = start_time + duration;
             thread::spawn(move || {
 
-                let mut core = Core::new().unwrap();
-                let start_time = Local::now();
-                let wanted_end_time = start_time + duration;
+                let mut core = Core::new().unwrap();             
                 let hyper_client = hyper::Client::configure()
                     .keep_alive_timeout(Some(timeout))
                     .build(&core.handle());
-                let hyper_url = Url::from_str(&url).expect("Invalid URL");
 
                 let iterator = (0..desired_connections_per_worker).map(|_| {
                     create_looping_worker(duration,
@@ -93,7 +93,7 @@ fn create_looping_worker<'a>(duration: Duration,
     let runinfo = RunInfo::new(duration);
     loop_fn((runinfo), move |mut runinfo| {
         let url = url.clone();
-        send_request(url, hyper_client).then(move |res| -> Result<_, ()> {
+        send_request(url, hyper_client).then(move |res| {
             match res {
                 // on request success
                 Ok(request_res) => {
