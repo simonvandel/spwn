@@ -6,9 +6,10 @@ use args::Config;
 use run_info::RunInfo;
 use misc::split_number;
 use tokio_core::reactor::Core;
-use chrono::{Duration, Local};
+use chrono::{Duration, Local, DateTime};
 use hyper::{Client, Url};
 use std::str::FromStr;
+use hyper::client::HttpConnector;
 
 use futures::{Future, stream};
 use futures::future::{ok, loop_fn, Loop};
@@ -55,41 +56,7 @@ impl Boss {
                 let hyper_url = Url::from_str(&url).expect("Invalid URL");
 
                 let iterator = (0..desired_connections_per_worker).map(|_| {
-
-                    let runinfo = RunInfo::new(duration);
-
-                    loop_fn((runinfo), |mut runinfo| {
-                        send_request(hyper_url.clone(), &hyper_client)
-                            .then(|res| -> Result<_, ()> { match res {
-                                // on request success
-                                Ok(request_res) => {
-                                    // update histogram
-                                    request_res.latency.num_nanoseconds()
-                                        .map(|x| runinfo.histogram.increment(x as u64).ok());
-                                    runinfo.requests_completed += 1;
-
-                                    let state = runinfo;
-
-                                    let now_time = Local::now();
-                                    if now_time < wanted_end_time {
-                                        Ok(Loop::Continue(state))
-                                    } else {
-                                        Ok(Loop::Break(state))
-                                    }
-                                }
-                                // on request failure
-                                Err(_) => {
-                                    runinfo.num_failed_requests += 1;
-                                    let state = runinfo;
-                                    let now_time = Local::now();
-                                    if now_time < wanted_end_time {
-                                        Ok(Loop::Continue(state))
-                                    } else {
-                                        Ok(Loop::Break(state))
-                                    }
-                                }
-                            }})
-                    })
+                    create_looping_worker(duration, hyper_url.clone(), &hyper_client, wanted_end_time)
                 });
                 let future = stream::futures_unordered(iterator)
                     .fold(RunInfo::new(duration), |mut runinfo_acc, runinfo| {
@@ -113,6 +80,43 @@ impl Boss {
                     runinfo_acc
                 })
     }
+}
+
+fn create_looping_worker<'a>(duration: Duration, url: Url, hyper_client: &'a Client<HttpConnector>, wanted_end_time: DateTime<Local>) -> impl Future<Item = RunInfo, Error = ()> + 'a {
+    let runinfo = RunInfo::new(duration);
+    loop_fn((runinfo), move|mut runinfo| {
+        let url = url.clone();
+        send_request(url, hyper_client)
+            .then(move|res| -> Result<_, ()> { match res {
+                // on request success
+                Ok(request_res) => {
+                    // update histogram
+                    request_res.latency.num_nanoseconds()
+                        .map(|x| runinfo.histogram.increment(x as u64).ok());
+                    runinfo.requests_completed += 1;
+
+                    let state = runinfo;
+
+                    let now_time = Local::now();
+                    if now_time < wanted_end_time {
+                        Ok(Loop::Continue(state))
+                    } else {
+                        Ok(Loop::Break(state))
+                    }
+                }
+                // on request failure
+                Err(_) => {
+                    runinfo.num_failed_requests += 1;
+                    let state = runinfo;
+                    let now_time = Local::now();
+                    if now_time < wanted_end_time {
+                        Ok(Loop::Continue(state))
+                    } else {
+                        Ok(Loop::Break(state))
+                    }
+                }
+            }})
+    })
 }
 
 fn send_request<C>(url: Url,
