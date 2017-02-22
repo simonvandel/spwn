@@ -38,7 +38,7 @@ impl Boss {
     pub fn start_workforce(&self, config: &Config) -> RunInfo {
         let (tx, rx) = channel();
         let desired_connections_per_worker_iter = split_number(config.num_connections,
-                                                                     self.num_threads);
+                                                               self.num_threads);
         // start num_threads workers
         for desired_connections_per_worker in desired_connections_per_worker_iter {
             let tx = tx.clone();
@@ -56,7 +56,10 @@ impl Boss {
                 let hyper_url = Url::from_str(&url).expect("Invalid URL");
 
                 let iterator = (0..desired_connections_per_worker).map(|_| {
-                    create_looping_worker(duration, hyper_url.clone(), &hyper_client, wanted_end_time)
+                    create_looping_worker(duration,
+                                          hyper_url.clone(),
+                                          &hyper_client,
+                                          wanted_end_time)
                 });
                 let future = stream::futures_unordered(iterator)
                     .fold(RunInfo::new(duration), |mut runinfo_acc, runinfo| {
@@ -67,31 +70,36 @@ impl Boss {
                 tx.send(res).unwrap();
             });
         }
-        
+
         self.collect_workers(rx, config.duration)
     }
 
     /// Collects information from all workers
     fn collect_workers(&self, rx: Receiver<RunInfo>, run_duration: Duration) -> RunInfo {
         rx.iter()
-                .take(self.num_threads)
-                .fold(RunInfo::new(run_duration), |mut runinfo_acc, runinfo| {
-                    runinfo_acc.merge(&runinfo);
-                    runinfo_acc
-                })
+            .take(self.num_threads)
+            .fold(RunInfo::new(run_duration), |mut runinfo_acc, runinfo| {
+                runinfo_acc.merge(&runinfo);
+                runinfo_acc
+            })
     }
 }
 
-fn create_looping_worker<'a>(duration: Duration, url: Url, hyper_client: &'a Client<HttpConnector>, wanted_end_time: DateTime<Local>) -> impl Future<Item = RunInfo, Error = ()> + 'a {
+fn create_looping_worker<'a>(duration: Duration,
+                             url: Url,
+                             hyper_client: &'a Client<HttpConnector>,
+                             wanted_end_time: DateTime<Local>)
+                             -> impl Future<Item = RunInfo, Error = ()> + 'a {
     let runinfo = RunInfo::new(duration);
-    loop_fn((runinfo), move|mut runinfo| {
+    loop_fn((runinfo), move |mut runinfo| {
         let url = url.clone();
-        send_request(url, hyper_client)
-            .then(move|res| -> Result<_, ()> { match res {
+        send_request(url, hyper_client).then(move |res| -> Result<_, ()> {
+            match res {
                 // on request success
                 Ok(request_res) => {
                     // update histogram
-                    request_res.latency.num_nanoseconds()
+                    request_res.latency
+                        .num_nanoseconds()
                         .map(|x| runinfo.histogram.increment(x as u64).ok());
                     runinfo.requests_completed += 1;
 
@@ -115,7 +123,8 @@ fn create_looping_worker<'a>(duration: Duration, url: Url, hyper_client: &'a Cli
                         Ok(Loop::Break(state))
                     }
                 }
-            }})
+            }
+        })
     })
 }
 
