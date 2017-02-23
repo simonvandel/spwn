@@ -46,12 +46,11 @@ pub fn parse_args() -> Config {
             .help("Timeout in seconds to run"))
         .get_matches();
 
-    // this can be unwrapped, as the validator should guarantee the argument is an integer
-    let num_threads = matches.value_of("threads").map(|x| x.parse()).unwrap().unwrap();
-    // this can be unwrapped, as the validator should guarantee the argument is an integer
-    let num_connections = matches.value_of("connections").map(|x| x.parse()).unwrap().unwrap();
-    let duration_seconds = matches.value_of("duration").map(|x| x.parse()).unwrap().unwrap();
-    let timeout_seconds = matches.value_of("timeout").map(|x| x.parse()).unwrap().unwrap();
+    // these can be unwrapped, as the validator should guarantee the argument is an integer
+    let num_threads = matches.value_of("threads").and_then(|x| x.parse().ok()).unwrap();
+    let num_connections = matches.value_of("connections").and_then(|x| x.parse().ok()).unwrap();
+    let duration_seconds = matches.value_of("duration").and_then(|x| x.parse().ok()).unwrap();
+    let timeout_seconds = matches.value_of("timeout").and_then(|x| x.parse().ok()).unwrap();
 
     Config {
         url: matches.value_of("url").unwrap().into(),
