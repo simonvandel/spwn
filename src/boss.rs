@@ -51,7 +51,7 @@ impl Boss {
             let wanted_end_time = start_time + duration;
             thread::spawn(move || {
                 // TODO: how to use error_chain on tokio-core?
-                let mut core = Core::new().expect("asdasd");
+                let mut core = Core::new().expect("Failed to create Tokio core");
                 let hyper_client = hyper::Client::configure()
                     .keep_alive_timeout(Some(timeout))
                     .build(&core.handle());
@@ -68,7 +68,7 @@ impl Boss {
                         ok(runinfo_acc)
                     });
                 // TODO: how to use error_chain with tokio?
-                let res = core.run(future).expect("failed to run core");
+                let res = core.run(future).expect("Failed to run Tokio Core");
 
                 tx.send(res)
             });
