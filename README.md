@@ -17,7 +17,7 @@ I primarily developed this tool to play with [Rust](https://www.rust-lang.org) a
 ## Example
 The following example will fire requests, maintaining 100 connections, to `localhost:8080` for 2 seconds using 4 threads.
 ```sh
-spwn localhost:8080 -d2 -c100 -t4
+spwn http://localhost:8080 -d2 -c100 -t4
 ```
 
 ## Building
