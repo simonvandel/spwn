@@ -16,6 +16,7 @@ use futures::future::{ok, loop_fn, Loop};
 use futures::Stream;
 use futures_utils::stopwatch;
 use request_result::RequestResult;
+use errors::*;
 
 /// Delegates and manages all the work.
 pub struct Boss {
@@ -35,7 +36,7 @@ impl Boss {
         }
     }
 
-    pub fn start_workforce(&self, config: &Config) -> RunInfo {
+    pub fn start_workforce(&self, config: &Config) -> Result<RunInfo> {
         let (tx, rx) = channel();
         let desired_connections_per_worker_iter = split_number(config.num_connections,
                                                                self.num_threads);
@@ -44,13 +45,13 @@ impl Boss {
             let tx = tx.clone();
             let url = config.url.clone();
             let duration = config.duration;
-            let timeout = config.timeout.to_std().unwrap();
-            let hyper_url = Url::from_str(&url).expect("Invalid URL");
+            let timeout = config.timeout.to_std()?;
+            let hyper_url = Url::from_str(&url)?;
             let start_time = Local::now();
             let wanted_end_time = start_time + duration;
             thread::spawn(move || {
-
-                let mut core = Core::new().unwrap();
+                // TODO: how to use error_chain on tokio-core?
+                let mut core = Core::new().expect("asdasd");
                 let hyper_client = hyper::Client::configure()
                     .keep_alive_timeout(Some(timeout))
                     .build(&core.handle());
@@ -66,12 +67,14 @@ impl Boss {
                         runinfo_acc.merge(&runinfo);
                         ok(runinfo_acc)
                     });
-                let res = core.run(future).unwrap();
-                tx.send(res).unwrap();
+                // TODO: how to use error_chain with tokio?
+                let res = core.run(future).expect("failed to run core");
+
+                tx.send(res)
             });
         }
 
-        self.collect_workers(rx, config.duration)
+        Ok(self.collect_workers(rx, config.duration))
     }
 
     /// Collects information from all workers
