@@ -105,12 +105,12 @@ fn create_looping_worker<'a>(duration: Duration,
                         .num_nanoseconds()
                         .map(|x| runinfo.histogram.increment(x as u64).ok());
                     runinfo.requests_completed += 1;
-                    loop_iter(runinfo, wanted_end_time)
+                    ok(loop_iter(runinfo, wanted_end_time))
                 }
                 // on request failure
                 Err(_) => {
                     runinfo.num_failed_requests += 1;
-                    loop_iter(runinfo, wanted_end_time)
+                    ok(loop_iter(runinfo, wanted_end_time))
                 }
             }
         })
@@ -120,12 +120,12 @@ fn create_looping_worker<'a>(duration: Duration,
 /// Determines what the next loop iteration should be; Continue or break.
 fn loop_iter(state: RunInfo,
              wanted_end_time: DateTime<Local>)
-             -> impl Future<Item = Loop<RunInfo, RunInfo>, Error = ()> {
+             -> Loop<RunInfo, RunInfo> {
     let now_time = Local::now();
     if now_time < wanted_end_time {
-        ok(Loop::Continue(state))
+        Loop::Continue(state)
     } else {
-        ok(Loop::Break(state))
+        Loop::Break(state)
     }
 }
 
