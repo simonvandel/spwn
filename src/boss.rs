@@ -56,21 +56,33 @@ impl Boss {
                     .keep_alive_timeout(Some(timeout))
                     .build(&core.handle());
 
+                // // create infinite stream of requests by unfolding
+                // let request_stream = stream::unfold(0u32, |state| {
+                //     let fut = send_request(hyper_url.clone(), &hyper_client);
+                //     // create a wrapper around the future, so we can pass the state.
+                //     // in this case, we do not need the state, so just pass it on unmodified
+                //     let fut_wrapper = fut.map(move |request_result| (request_result, state));
+                //     Some(fut_wrapper)
+                // });
+
+
+                
+                // TODO: make infinite
                 let iterator = (0..desired_connections_per_worker).map(|_| {
                     create_looping_worker(duration,
                                           hyper_url.clone(),
                                           &hyper_client,
                                           wanted_end_time)
                 });
-                let future = stream::futures_unordered(iterator)
-                    .fold(RunInfo::new(duration), |mut runinfo_acc, runinfo| {
-                        runinfo_acc.merge(&runinfo);
-                        ok(runinfo_acc)
+                // create stream of requests
+                let request_stream = stream::futures_unordered(iterator);
+                let future = request_stream
+                    .for_each(|request_result| {
+                        let _ = tx.send(request_result);
+                        Ok(())
                     });
                 // TODO: how to use error_chain with tokio?
-                let res = core.run(future).expect("Failed to run Tokio Core");
-
-                tx.send(res)
+                let _ = core.run(future).expect("Failed to run Tokio Core");
             });
         }
 
@@ -79,8 +91,11 @@ impl Boss {
 
     /// Collects information from all workers
     fn collect_workers(&self, rx: Receiver<RunInfo>, run_duration: Duration) -> RunInfo {
+        let start_time = Local::now();
+        let wanted_end_time = start_time + run_duration;
         rx.iter()
-            .take(self.num_threads)
+            .take(100)
+            // .take_while(|_| Local::now() < wanted_end_time)
             .fold(RunInfo::new(run_duration), |mut runinfo_acc, runinfo| {
                 runinfo_acc.merge(&runinfo);
                 runinfo_acc
