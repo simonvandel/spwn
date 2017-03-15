@@ -1,6 +1,6 @@
 extern crate hyper;
 
-use std::sync::mpsc::{Receiver, channel, Sender};
+use futures::sync::mpsc::{Receiver, channel, unbounded, Sender, UnboundedReceiver};
 use std::thread;
 use args::Config;
 use run_info::RunInfo;
@@ -37,7 +37,7 @@ impl Boss {
     }
 
     pub fn start_workforce(&self, config: &Config) -> Result<RunInfo> {
-        let (tx, rx) = channel();
+        let (tx, rx) = unbounded();
         let desired_connections_per_worker_iter = split_number(config.num_connections,
                                                                self.num_threads);
         // start num_threads workers
@@ -73,15 +73,15 @@ impl Boss {
     }
 
     /// Collects information from all workers
-    fn collect_workers(&self, rx: Receiver<RequestResult>, run_duration: Duration) -> RunInfo {
+    fn collect_workers(&self, rx: UnboundedReceiver<RequestResult>, run_duration: Duration) -> RunInfo {
         let start_time = Local::now();
         let wanted_end_time = start_time + run_duration;
-        rx.iter()
-            .take_while(|_| Local::now() < wanted_end_time)
+        rx
+            .take_while(|_| ok(Local::now() < wanted_end_time))
             .fold(RunInfo::new(run_duration), |mut runinfo_acc, request_result| {
                 runinfo_acc.add_request(&request_result);
-                runinfo_acc
-            })
+                ok(runinfo_acc)
+            }).wait().unwrap()
     }
 }
 
