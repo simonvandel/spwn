@@ -1,5 +1,6 @@
 use chrono::Duration;
 use histogram::Histogram;
+use request_result::RequestResult;
 
 pub struct RunInfo {
     /// Number of requests successfully completed
@@ -23,9 +24,18 @@ impl RunInfo {
         (self.requests_completed as f32) / (self.duration.num_seconds() as f32)
     }
 
-    pub fn merge(&mut self, other: &Self) {
-        self.requests_completed += other.requests_completed;
-        self.num_failed_requests += other.num_failed_requests;
-        self.histogram.merge(&other.histogram);
+    pub fn add_request(&mut self, request: &RequestResult) {
+        use request_result::RequestResult::*;
+        match *request {
+            Success { latency } => {
+                self.requests_completed += 1;
+                // update histogram
+                latency.num_nanoseconds()
+                    .map(|x| self.histogram.increment(x as u64).ok());
+            }
+            Failure => {
+                self.num_failed_requests += 1;
+            }
+        }
     }
 }
