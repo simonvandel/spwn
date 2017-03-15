@@ -24,4 +24,4 @@ optional = false
 [profile]
 
 [profile.release]
-debug = true
+#debug = true
