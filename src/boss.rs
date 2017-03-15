@@ -55,7 +55,12 @@ impl Boss {
 
                 let iterator = (0..desired_connections_per_worker).map(|_| {
                     let tx = tx.clone();
-                    create_looping_worker(hyper_url.clone(), &hyper_client, tx)
+                    
+                    create_looping_worker(hyper_url.clone(), &hyper_client)
+                        .for_each(move |req| {
+                            tx.send(req);
+                            ok(())
+                        })
                 });
                 // create stream of requests
                 let request_stream = stream::futures_unordered(iterator);
@@ -81,18 +86,14 @@ impl Boss {
 }
 
 fn create_looping_worker<'a>(url: Url,
-                             hyper_client: &'a Client<HttpConnector>,
-                             tx: Sender<RequestResult>)
-                             -> impl Future<Item = (), Error = ()> + 'a {
-    loop_fn((), move |_| {
-        let url = url.clone();
-        let tx = tx.clone();
-        send_request(url, hyper_client)
-            .and_then(move |request_result| {
-                let _ = tx.send(request_result);
-                Ok(())
-            })
-            .and_then(|_| ok(Loop::Continue(())))
+                             hyper_client: &'a Client<HttpConnector>
+                             )
+                             -> impl Stream<Item = RequestResult, Error = ()> + 'a {
+    stream::unfold(0u32, move |state| {
+        let res = send_request(url.clone(), hyper_client);
+        
+        let fut = res.and_then(move |req| ok::<_, _>((req, state)));
+        Some(fut)
     })
 }
 
