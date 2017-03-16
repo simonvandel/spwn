@@ -38,4 +38,10 @@ impl RunInfo {
             }
         }
     }
+
+    pub fn merge(&mut self, other: &Self) {
+        self.requests_completed += other.requests_completed;
+        self.num_failed_requests += other.num_failed_requests;
+        self.histogram.merge(&other.histogram);
+    }
 }

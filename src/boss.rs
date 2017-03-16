@@ -6,7 +6,7 @@ use args::Config;
 use run_info::RunInfo;
 use misc::split_number;
 use tokio_core::reactor::Core;
-use chrono::{Duration, Local};
+use chrono::{Local};
 use hyper::{Client, Url};
 use std::str::FromStr;
 use hyper::client::HttpConnector;
@@ -45,7 +45,9 @@ impl Boss {
 
         // resolve dns once and for all
         let resolved_url = resolve_dns(&config.url)?;
-
+        let start_time = Local::now();
+        let wanted_end_time = start_time + config.duration;
+        let run_duration = config.duration;
 
         // start num_threads workers
         for desired_connections_per_worker in desired_connections_per_worker_iter {
@@ -53,6 +55,7 @@ impl Boss {
             let timeout = config.timeout.to_std()?;
             let hyper_url = resolved_url.clone();
             thread::spawn(move || {
+
                 // TODO: how to use error_chain on tokio-core?
                 let mut core = Core::new().expect("Failed to create Tokio core");
                 let hyper_client = hyper::Client::configure()
@@ -60,36 +63,38 @@ impl Boss {
                     .build(&core.handle());
 
                 let iterator = (0..desired_connections_per_worker).map(|_| {
-                    let tx = tx.clone();
 
-                    create_looping_worker(hyper_url.clone(), &hyper_client).for_each(move |req| {
-                        let _ = tx.send(req);
-                        ok(())
-                    })
+
+                    create_looping_worker(hyper_url.clone(), &hyper_client)
+                        .take_while(|_| ok(Local::now() < wanted_end_time))
+                        .fold(RunInfo::new(run_duration),
+                              |mut runinfo_acc, request_result| {
+                                  runinfo_acc.add_request(&request_result);
+                                  ok(runinfo_acc)
+                              })
                 });
                 // create stream of requests
-                let request_stream = stream::futures_unordered(iterator);
+                let request_stream = stream::futures_unordered(iterator)
+                    .for_each(move |run_info| {
+                        let tx = tx.clone();
+                        let _ = tx.send(run_info);
+                        ok(())
+                    });
                 // TODO: how to use error_chain with tokio?
-                let _ = core.run(request_stream.into_future());
+                let _ = core.run(request_stream);
             });
         }
 
-        Ok(self.collect_workers(rx, config.duration))
+        Ok(self.collect_workers(rx, config))
     }
 
     /// Collects information from all workers
-    fn collect_workers(&self,
-                       rx: UnboundedReceiver<RequestResult>,
-                       run_duration: Duration)
-                       -> RunInfo {
-        let start_time = Local::now();
-        let wanted_end_time = start_time + run_duration;
-        rx.take_while(|_| ok(Local::now() < wanted_end_time))
-            .fold(RunInfo::new(run_duration),
-                  |mut runinfo_acc, request_result| {
-                      runinfo_acc.add_request(&request_result);
-                      ok(runinfo_acc)
-                  })
+    fn collect_workers(&self, rx: UnboundedReceiver<RunInfo>, config: &Config) -> RunInfo {
+        rx.take(config.num_connections as u64)
+            .fold(RunInfo::new(config.duration), |mut runinfo_acc, run_info| {
+                runinfo_acc.merge(&run_info);
+                ok(runinfo_acc)
+            })
             .wait()
             .unwrap()
     }
