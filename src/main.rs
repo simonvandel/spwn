@@ -24,6 +24,8 @@ extern crate quickcheck;
 extern crate time;
 extern crate log;
 
+extern crate dns_lookup;
+
 mod args;
 mod misc;
 mod futures_utils;

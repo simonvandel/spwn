@@ -6,6 +6,7 @@ version = "0.1.0"
 [dependencies]
 chrono = "0.3"
 clap = "2.20.1"
+dns-lookup = "0.2.1"
 env_logger = "0.4.0"
 error-chain = "0.10.0"
 futures = "0.1.10"
@@ -24,4 +25,4 @@ optional = false
 [profile]
 
 [profile.release]
-#debug = true
+debug = true

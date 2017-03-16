@@ -1,6 +1,6 @@
 extern crate hyper;
 
-use futures::sync::mpsc::{Receiver, channel, unbounded, Sender, UnboundedReceiver};
+use futures::sync::mpsc::{unbounded, UnboundedReceiver};
 use std::thread;
 use args::Config;
 use run_info::RunInfo;
@@ -12,11 +12,13 @@ use std::str::FromStr;
 use hyper::client::HttpConnector;
 
 use futures::{Future, stream};
-use futures::future::{ok, loop_fn, Loop};
+use futures::future::ok;
 use futures::Stream;
 use futures_utils::stopwatch;
 use request_result::RequestResult;
 use errors::*;
+
+use dns_lookup::lookup_host;
 
 /// Delegates and manages all the work.
 pub struct Boss {
@@ -40,12 +42,16 @@ impl Boss {
         let (tx, rx) = unbounded();
         let desired_connections_per_worker_iter = split_number(config.num_connections,
                                                                self.num_threads);
+
+        // resolve dns once and for all
+        let resolved_url = resolve_dns(&config.url)?;
+
+
         // start num_threads workers
         for desired_connections_per_worker in desired_connections_per_worker_iter {
             let tx = tx.clone();
-            let url = config.url.clone();
             let timeout = config.timeout.to_std()?;
-            let hyper_url = Url::from_str(&url)?;
+            let hyper_url = resolved_url.clone();
             thread::spawn(move || {
                 // TODO: how to use error_chain on tokio-core?
                 let mut core = Core::new().expect("Failed to create Tokio core");
@@ -55,12 +61,11 @@ impl Boss {
 
                 let iterator = (0..desired_connections_per_worker).map(|_| {
                     let tx = tx.clone();
-                    
-                    create_looping_worker(hyper_url.clone(), &hyper_client)
-                        .for_each(move |req| {
-                            tx.send(req);
-                            ok(())
-                        })
+
+                    create_looping_worker(hyper_url.clone(), &hyper_client).for_each(move |req| {
+                        let _ = tx.send(req);
+                        ok(())
+                    })
                 });
                 // create stream of requests
                 let request_stream = stream::futures_unordered(iterator);
@@ -73,25 +78,45 @@ impl Boss {
     }
 
     /// Collects information from all workers
-    fn collect_workers(&self, rx: UnboundedReceiver<RequestResult>, run_duration: Duration) -> RunInfo {
+    fn collect_workers(&self,
+                       rx: UnboundedReceiver<RequestResult>,
+                       run_duration: Duration)
+                       -> RunInfo {
         let start_time = Local::now();
         let wanted_end_time = start_time + run_duration;
-        rx
-            .take_while(|_| ok(Local::now() < wanted_end_time))
-            .fold(RunInfo::new(run_duration), |mut runinfo_acc, request_result| {
-                runinfo_acc.add_request(&request_result);
-                ok(runinfo_acc)
-            }).wait().unwrap()
+        rx.take_while(|_| ok(Local::now() < wanted_end_time))
+            .fold(RunInfo::new(run_duration),
+                  |mut runinfo_acc, request_result| {
+                      runinfo_acc.add_request(&request_result);
+                      ok(runinfo_acc)
+                  })
+            .wait()
+            .unwrap()
     }
 }
 
+// resolves the given url to an ip
+fn resolve_dns(url: &str) -> Result<Url> {
+    let parsed_url = Url::from_str(url)?;
+    let host = parsed_url.host_str().unwrap();
+    let host = lookup_host(&host)
+        .expect("DNS lookup failed")
+        .filter_map(|x| x.ok())
+        .filter(|x| x.is_ipv4())
+        .next()
+        .expect("DNS lookup failed");
+
+    let mut parsed_url = parsed_url.clone();
+    let _ = parsed_url.set_ip_host(host);
+    Ok(parsed_url)
+}
+
 fn create_looping_worker<'a>(url: Url,
-                             hyper_client: &'a Client<HttpConnector>
-                             )
+                             hyper_client: &'a Client<HttpConnector>)
                              -> impl Stream<Item = RequestResult, Error = ()> + 'a {
     stream::unfold(0u32, move |state| {
         let res = send_request(url.clone(), hyper_client);
-        
+
         let fut = res.and_then(move |req| ok::<_, _>((req, state)));
         Some(fut)
     })
