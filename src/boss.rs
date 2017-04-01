@@ -7,7 +7,7 @@ use run_info::RunInfo;
 use misc::split_number;
 use tokio_core::reactor::Core;
 use chrono::{Local};
-use hyper::{Client, Url};
+use hyper::{Client, Uri};
 use std::str::FromStr;
 use hyper::client::HttpConnector;
 
@@ -101,9 +101,9 @@ impl Boss {
 }
 
 // resolves the given url to an ip
-fn resolve_dns(url: &str) -> Result<Url> {
-    let parsed_url = Url::from_str(url)?;
-    let host = parsed_url.host_str().unwrap();
+fn resolve_dns(url: &str) -> Result<Uri> {
+    let parsed_url = Uri::from_str(url).unwrap();
+    let host = parsed_url.host().unwrap();
     let host = lookup_host(&host)
         .expect("DNS lookup failed")
         .filter_map(|x| x.ok())
@@ -111,12 +111,11 @@ fn resolve_dns(url: &str) -> Result<Url> {
         .next()
         .expect("DNS lookup failed");
 
-    let mut parsed_url = parsed_url.clone();
-    let _ = parsed_url.set_ip_host(host);
-    Ok(parsed_url)
+    let uri = Uri::from_str(&format!("{}://{}:{}", parsed_url.scheme().unwrap(), host, parsed_url.port().unwrap())).unwrap();
+    Ok(uri)
 }
 
-fn create_looping_worker<'a>(url: Url,
+fn create_looping_worker<'a>(url: Uri,
                              hyper_client: &'a Client<HttpConnector>)
                              -> impl Stream<Item = RequestResult, Error = ()> + 'a {
     stream::unfold(0u32, move |state| {
@@ -127,7 +126,7 @@ fn create_looping_worker<'a>(url: Url,
     })
 }
 
-fn send_request<C>(url: Url,
+fn send_request<C>(url: Uri,
                    hyper_client: &Client<C>)
                    -> impl Future<Item = RequestResult, Error = ()>
     where C: hyper::client::Connect
