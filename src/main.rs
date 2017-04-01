@@ -1,4 +1,5 @@
 #![feature(conservative_impl_trait)]
+#![feature(lookup_host)]
 
 // `error_chain!` can recurse deeply
 #![recursion_limit = "1024"]
@@ -23,8 +24,6 @@ extern crate quickcheck;
 
 extern crate time;
 extern crate log;
-
-extern crate dns_lookup;
 
 mod args;
 mod misc;

@@ -11,14 +11,14 @@ use hyper::{Client, Uri};
 use std::str::FromStr;
 use hyper::client::HttpConnector;
 
+use std::net::lookup_host;
+
 use futures::{Future, stream};
 use futures::future::ok;
 use futures::Stream;
 use futures_utils::stopwatch;
 use request_result::RequestResult;
 use errors::*;
-
-use dns_lookup::lookup_host;
 
 /// Delegates and manages all the work.
 pub struct Boss {
@@ -102,16 +102,15 @@ impl Boss {
 
 // resolves the given url to an ip
 fn resolve_dns(url: &str) -> Result<Uri> {
-    let parsed_url = Uri::from_str(url).unwrap();
-    let host = parsed_url.host().unwrap();
+    let parsed_url = Uri::from_str(url)?;
+    let host = parsed_url.host().expect("DNS lookup failed");
     let host = lookup_host(&host)
         .expect("DNS lookup failed")
-        .filter_map(|x| x.ok())
         .filter(|x| x.is_ipv4())
         .next()
         .expect("DNS lookup failed");
 
-    let uri = Uri::from_str(&format!("{}://{}:{}", parsed_url.scheme().unwrap(), host, parsed_url.port().unwrap())).unwrap();
+    let uri = Uri::from_str(&format!("{}://{}:{}", parsed_url.scheme().unwrap(), host.ip(), parsed_url.port().unwrap())).unwrap();
     Ok(uri)
 }
 
